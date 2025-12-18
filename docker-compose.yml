@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    container_name: financas-local
+    ports:
+      - "3000:3000"  # Servidor backend
+      - "5173:5173"  # Vite dev server
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - ./data:/app/data  # Persistir banco de dados
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+    command: sh -c "concurrently -k \"npm run dev:server\" \"npm run dev:vite\""
+

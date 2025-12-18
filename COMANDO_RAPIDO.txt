@@ -1,0 +1,21 @@
+═══════════════════════════════════════════════════════════════
+  COMANDO RÁPIDO PARA RESOLVER O PROBLEMA
+═══════════════════════════════════════════════════════════════
+
+Execute ESTE comando completo (copie e cole tudo):
+
+cd financas-local && source ~/.nvm/nvm.sh && nvm use 24 && npm rebuild better-sqlite3 && npm run check && npm run dev
+
+═══════════════════════════════════════════════════════════════
+
+Se ainda não funcionar, execute passo a passo:
+
+1. cd financas-local
+2. source ~/.nvm/nvm.sh
+3. nvm use 24
+4. npm rebuild better-sqlite3
+5. npm run check
+6. npm run dev
+
+═══════════════════════════════════════════════════════════════
+
