@@ -24,7 +24,10 @@ dist-electron
 *.sw?
 
 # Database
+# Permitir o banco de dados principal para ser versionado (deve vir antes da regra geral)
+!data/financas.db
 *.db
 *.db-shm
 *.db-wal
+!data/
 
