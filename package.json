@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:vite\" \"npm run dev:browser\"",
+    "dev:docker": "concurrently \"npm run dev:server\" \"npm run dev:vite\"",
     "start": "npm run dev",
     "dev:server": "node server.js",
     "dev:vite": "vite",

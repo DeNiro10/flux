@@ -35,7 +35,22 @@ function App() {
   const [showCredentialsModal, setShowCredentialsModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategory, setNewCategory] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
+  // Restaurar estado salvo ao carregar
+  const getSavedState = () => {
+    try {
+      const savedTab = sessionStorage.getItem('activeTab');
+      const savedFilters = sessionStorage.getItem('filters');
+      return {
+        tab: savedTab || 'overview',
+        filters: savedFilters ? JSON.parse(savedFilters) : null
+      };
+    } catch (e) {
+      return { tab: 'overview', filters: null };
+    }
+  };
+
+  const savedState = getSavedState();
+  const [activeTab, setActiveTab] = useState(savedState.tab);
   const [hideValues, setHideValues] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
   const [logoError, setLogoError] = useState(false);
@@ -155,14 +170,151 @@ function App() {
     loading: false,
     error: null,
   });
+
+  const [showLoanModal, setShowLoanModal] = useState(false);
+  const [editingLoan, setEditingLoan] = useState(null);
+  const [showTransactionModal, setShowTransactionModal] = useState(false);
+  const [selectedLoanForTransaction, setSelectedLoanForTransaction] = useState(null);
+  const [transactionForm, setTransactionForm] = useState({
+    date: '',
+    amount: '',
+    description: '',
+    installmentNumber: ''
+  });
+
+  const [goalsData, setGoalsData] = useState({
+    goals: [],
+    loading: false,
+    error: null,
+  });
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [editingGoal, setEditingGoal] = useState(null);
+  const [goalForm, setGoalForm] = useState({
+    name: '', // Nome é a categoria
+    targetAmount: '',
+    periodMonth: new Date().getMonth() + 1,
+    periodYear: new Date().getFullYear()
+  });
+  const [loanForm, setLoanForm] = useState({
+    description: '',
+    type: 'Outro',
+    bankName: '',
+    ownerName: '',
+    totalAmount: '',
+    totalInstallments: '',
+    paidInstallments: '',
+    installmentValue: '',
+    interestRate: '',
+    dueDate: '',
+    paymentMethod: ''
+  });
   
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState(savedState.filters || {
     period: getCurrentPeriod(),
     accountType: 'all',
     bankName: 'all',
     ownerName: 'all',
     category: 'all',
   });
+
+  // Salvar estado (aba, filtros e scroll) sempre que mudarem
+  useEffect(() => {
+    sessionStorage.setItem('activeTab', activeTab);
+    sessionStorage.setItem('filters', JSON.stringify(filters));
+  }, [activeTab, filters]);
+
+  // Salvar posição do scroll continuamente
+  useEffect(() => {
+    let scrollTimeout;
+    const handleScroll = () => {
+      // Debounce para não salvar a cada pixel
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        sessionStorage.setItem('scrollPosition', window.scrollY.toString());
+      }, 100);
+    };
+    
+    // Salvar scroll a cada mudança
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    
+    // Também salvar antes de sair
+    const handleBeforeUnload = () => {
+      sessionStorage.setItem('scrollPosition', window.scrollY.toString());
+      sessionStorage.setItem('activeTab', activeTab);
+      sessionStorage.setItem('filters', JSON.stringify(filters));
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      clearTimeout(scrollTimeout);
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [activeTab, filters]);
+
+  // Restaurar posição do scroll após carregar - usar um único useEffect que monitora tudo
+  useEffect(() => {
+    if (loading || !dashboardData) return;
+    
+    const savedScrollPosition = sessionStorage.getItem('scrollPosition');
+    const savedActiveTab = sessionStorage.getItem('activeTab');
+    
+    if (!savedActiveTab || savedActiveTab !== activeTab || !savedScrollPosition) {
+      return;
+    }
+    
+    const scrollPos = parseInt(savedScrollPosition, 10);
+    if (scrollPos <= 0) return;
+    
+    // Usar MutationObserver para detectar quando o DOM está estável
+    const observer = new MutationObserver(() => {
+      // Verificar se o conteúdo tem altura suficiente
+      if (document.documentElement.scrollHeight >= scrollPos) {
+        // Restaurar scroll
+        window.scrollTo(0, scrollPos);
+        observer.disconnect();
+      }
+    });
+    
+    // Observar mudanças no body
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+    
+    // Também tentar imediatamente e após delays
+    const restoreScroll = () => {
+      if (document.documentElement.scrollHeight >= scrollPos) {
+        window.scrollTo(0, scrollPos);
+        observer.disconnect();
+        return true;
+      }
+      return false;
+    };
+    
+    // Tentar imediatamente
+    if (!restoreScroll()) {
+      // Tentar após pequenos delays
+      setTimeout(() => {
+        if (!restoreScroll()) {
+          setTimeout(() => {
+            restoreScroll();
+            observer.disconnect();
+          }, 500);
+        }
+      }, 200);
+    }
+    
+    // Limpar observer após 2 segundos
+    setTimeout(() => {
+      observer.disconnect();
+    }, 2000);
+    
+    return () => {
+      observer.disconnect();
+    };
+  }, [loading, dashboardData, activeTab]);
 
   useEffect(() => {
     loadDashboard();
@@ -199,6 +351,253 @@ function App() {
     } catch (err) {
       console.error('Erro ao buscar empréstimos:', err);
       setLoansData(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
+
+  const handleOpenLoanModal = (loan = null) => {
+    if (loan) {
+      setEditingLoan(loan);
+      setLoanForm({
+        description: loan.description,
+        type: loan.type,
+        bankName: loan.bankName !== 'Não informado' ? loan.bankName : '',
+        ownerName: loan.ownerName !== 'Não informado' ? loan.ownerName : '',
+        totalAmount: loan.totalAmount.toString(),
+        totalInstallments: loan.totalInstallments.toString(),
+        paidInstallments: loan.paidInstallments.toString(),
+        installmentValue: loan.totalInstallments > 0 ? (loan.totalAmount / loan.totalInstallments).toFixed(2) : '',
+        interestRate: loan.interestRate ? loan.interestRate.toString() : '',
+        dueDate: loan.dueDate || '',
+        paymentMethod: loan.paymentMethod || ''
+      });
+    } else {
+      setEditingLoan(null);
+      setLoanForm({
+        description: '',
+        type: 'Outro',
+        bankName: '',
+        ownerName: '',
+        totalAmount: '',
+        totalInstallments: '',
+        paidInstallments: '0',
+        installmentValue: '',
+        interestRate: '',
+        dueDate: '',
+        paymentMethod: ''
+      });
+    }
+    setShowLoanModal(true);
+  };
+
+  const handleCloseLoanModal = () => {
+    setShowLoanModal(false);
+    setEditingLoan(null);
+    setLoanForm({
+      description: '',
+      type: 'Outro',
+      bankName: '',
+      ownerName: '',
+      totalAmount: '',
+      totalInstallments: '',
+      paidInstallments: '0',
+      installmentValue: '',
+      interestRate: '',
+      dueDate: '',
+      paymentMethod: ''
+    });
+  };
+
+  const handleSaveLoan = async () => {
+    try {
+      const loanData = {
+        description: loanForm.description,
+        type: loanForm.type,
+        bankName: loanForm.bankName || null,
+        ownerName: loanForm.ownerName || null,
+        totalAmount: parseFloat(loanForm.totalAmount),
+        totalInstallments: parseInt(loanForm.totalInstallments),
+        paidInstallments: parseInt(loanForm.paidInstallments) || 0,
+        installmentValue: loanForm.installmentValue ? parseFloat(loanForm.installmentValue) : (parseFloat(loanForm.totalAmount) / parseInt(loanForm.totalInstallments)),
+        interestRate: loanForm.interestRate ? parseFloat(loanForm.interestRate) : null,
+        dueDate: loanForm.dueDate || null,
+        paymentMethod: loanForm.paymentMethod || null,
+        sourceLoanId: editingLoan && !editingLoan.isManual ? editingLoan.id : null
+      };
+
+      if (editingLoan) {
+        await api.updateLoan(editingLoan.id, loanData);
+      } else {
+        await api.createLoan(loanData);
+      }
+
+      handleCloseLoanModal();
+      await loadLoans();
+    } catch (err) {
+      console.error('Erro ao salvar empréstimo:', err);
+      alert('Erro ao salvar empréstimo: ' + err.message);
+    }
+  };
+
+  const handleDeleteLoan = async (loanId) => {
+    if (!confirm('Tem certeza que deseja deletar este empréstimo?')) {
+      return;
+    }
+
+    try {
+      await api.deleteLoan(loanId);
+      await loadLoans();
+    } catch (err) {
+      console.error('Erro ao deletar empréstimo:', err);
+      alert('Erro ao deletar empréstimo: ' + err.message);
+    }
+  };
+
+  const handleOpenTransactionModal = (loan) => {
+    setSelectedLoanForTransaction(loan);
+    setTransactionForm({
+      date: new Date().toISOString().split('T')[0],
+      amount: '',
+      description: '',
+      installmentNumber: (loan.paidInstallments + 1).toString()
+    });
+    setShowTransactionModal(true);
+  };
+
+  const handleCloseTransactionModal = () => {
+    setShowTransactionModal(false);
+    setSelectedLoanForTransaction(null);
+    setTransactionForm({
+      date: '',
+      amount: '',
+      description: '',
+      installmentNumber: ''
+    });
+  };
+
+  const handleSaveTransaction = async () => {
+    try {
+      if (!selectedLoanForTransaction) return;
+
+      await api.addLoanTransaction(selectedLoanForTransaction.id, {
+        date: transactionForm.date,
+        amount: parseFloat(transactionForm.amount),
+        description: transactionForm.description,
+        installmentNumber: transactionForm.installmentNumber ? parseInt(transactionForm.installmentNumber) : null
+      });
+
+      handleCloseTransactionModal();
+      await loadLoans();
+    } catch (err) {
+      console.error('Erro ao salvar transação:', err);
+      alert('Erro ao salvar transação: ' + err.message);
+    }
+  };
+
+  const handleDeleteTransaction = async (loanId, transactionId) => {
+    if (!confirm('Tem certeza que deseja deletar esta transação?')) {
+      return;
+    }
+
+    try {
+      await api.deleteLoanTransaction(loanId, transactionId);
+      await loadLoans();
+    } catch (err) {
+      console.error('Erro ao deletar transação:', err);
+      alert('Erro ao deletar transação: ' + err.message);
+    }
+  };
+
+  const loadGoals = async () => {
+    try {
+      setGoalsData(prev => ({ ...prev, loading: true, error: null }));
+      // Usar o mesmo período do filtro atual
+      const periodParam = filters.period && filters.period !== 'all' ? `?period=${filters.period}` : '';
+      const data = await api.getGoals(periodParam);
+      setGoalsData({
+        goals: data.goals || [],
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      console.error('Erro ao buscar metas:', err);
+      setGoalsData(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'goals') {
+      loadGoals();
+    }
+  }, [activeTab, filters.period]);
+
+  const handleOpenGoalModal = (goal = null) => {
+    if (goal) {
+      setEditingGoal(goal);
+      setGoalForm({
+        name: goal.name || goal.category || '',
+        targetAmount: goal.targetAmount.toString(),
+        periodMonth: goal.periodMonth || new Date().getMonth() + 1,
+        periodYear: goal.periodYear || new Date().getFullYear()
+      });
+    } else {
+      const now = new Date();
+      setEditingGoal(null);
+      setGoalForm({
+        name: '',
+        targetAmount: '',
+        periodMonth: now.getMonth() + 1,
+        periodYear: now.getFullYear()
+      });
+    }
+    setShowGoalModal(true);
+  };
+
+  const handleCloseGoalModal = () => {
+    const now = new Date();
+    setShowGoalModal(false);
+    setEditingGoal(null);
+    setGoalForm({
+      name: '',
+      targetAmount: '',
+      periodMonth: now.getMonth() + 1,
+      periodYear: now.getFullYear()
+    });
+  };
+
+  const handleSaveGoal = async () => {
+    try {
+      const goalData = {
+        name: goalForm.name, // Nome é a categoria
+        targetAmount: parseFloat(goalForm.targetAmount),
+        periodMonth: parseInt(goalForm.periodMonth),
+        periodYear: parseInt(goalForm.periodYear)
+      };
+
+      if (editingGoal) {
+        await api.updateGoal(editingGoal.id, goalData);
+      } else {
+        await api.createGoal(goalData);
+      }
+
+      handleCloseGoalModal();
+      await loadGoals();
+    } catch (err) {
+      console.error('Erro ao salvar meta:', err);
+      alert('Erro ao salvar meta: ' + err.message);
+    }
+  };
+
+  const handleDeleteGoal = async (goalId) => {
+    if (!confirm('Tem certeza que deseja deletar esta meta?')) {
+      return;
+    }
+
+    try {
+      await api.deleteGoal(goalId);
+      await loadGoals();
+    } catch (err) {
+      console.error('Erro ao deletar meta:', err);
+      alert('Erro ao deletar meta: ' + err.message);
     }
   };
 
@@ -438,7 +837,7 @@ function App() {
 
         {/* Navigation Tabs */}
         <div className="px-8 flex gap-1">
-          {['overview', 'transactions', 'loans', 'analytics'].map(tab => (
+          {['overview', 'transactions', 'loans', 'goals', 'analytics'].map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -449,7 +848,7 @@ function App() {
                   : clsx(theme.textMuted, darkMode ? "hover:text-white" : "hover:text-black")
               )}
             >
-              {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : 'Análises'}
+              {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : tab === 'goals' ? 'Metas' : 'Análises'}
               {activeTab === tab && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#00D4FF] to-[#7B61FF]"></div>
               )}
@@ -695,7 +1094,7 @@ function App() {
                 <h3 className={clsx("text-sm font-medium uppercase tracking-wider mb-6", darkMode ? "text-white/80" : "text-black/80")}>Top Gastos</h3>
                 {topCategories.length > 0 ? (
                   <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={topCategories.slice(0, 6)} layout="vertical">
+                    <BarChart data={topCategories.slice(0, 6)} layout="vertical" cursor={false}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                       <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
                       <YAxis type="category" dataKey="category" tick={{ fill: '#64748b', fontSize: 11 }} width={100} />
@@ -704,10 +1103,13 @@ function App() {
                         contentStyle={{ 
                           backgroundColor: '#1a1a2e', 
                           border: '1px solid rgba(255,255,255,0.1)', 
-                          borderRadius: '12px' 
+                          borderRadius: '12px',
+                          boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
                         }}
+                        itemStyle={{ color: '#fff' }}
+                        labelStyle={{ color: '#fff' }}
                       />
-                      <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+                      <Bar dataKey="total" radius={[0, 4, 4, 0]} cursor={false}>
                         {topCategories.slice(0, 6).map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                         ))}
@@ -766,8 +1168,34 @@ function App() {
           <div className="space-y-6">
             {filters.accountType === 'all' ? (
               <>
-                <TransactionTable transactions={bankTransactions} title="Conta Corrente" formatCurrency={formatCurrency} formatDate={formatDate} editingCategory={editingCategory} setEditingCategory={setEditingCategory} newCategory={newCategory} setNewCategory={setNewCategory} handleUpdateCategory={handleUpdateCategory} theme={theme} darkMode={darkMode} />
-                <TransactionTable transactions={creditCardTransactions} title="Cartão de Crédito" formatCurrency={formatCurrency} formatDate={formatDate} editingCategory={editingCategory} setEditingCategory={setEditingCategory} newCategory={newCategory} setNewCategory={setNewCategory} handleUpdateCategory={handleUpdateCategory} theme={theme} darkMode={darkMode} />
+                <TransactionTable 
+                  transactions={bankTransactions} 
+                  title="Conta Corrente" 
+                  formatCurrency={formatCurrency} 
+                  formatDate={formatDate} 
+                  editingCategory={editingCategory} 
+                  setEditingCategory={setEditingCategory} 
+                  newCategory={newCategory} 
+                  setNewCategory={setNewCategory} 
+                  handleUpdateCategory={handleUpdateCategory} 
+                  theme={theme} 
+                  darkMode={darkMode}
+                  creditCardBills={realBalances.creditCardBillsDetailed || []}
+                />
+                <TransactionTable 
+                  transactions={creditCardTransactions} 
+                  title="Cartão de Crédito" 
+                  formatCurrency={formatCurrency} 
+                  formatDate={formatDate} 
+                  editingCategory={editingCategory} 
+                  setEditingCategory={setEditingCategory} 
+                  newCategory={newCategory} 
+                  setNewCategory={setNewCategory} 
+                  handleUpdateCategory={handleUpdateCategory} 
+                  theme={theme} 
+                  darkMode={darkMode}
+                  creditCardBills={realBalances.creditCardBillsDetailed || []}
+                />
               </>
             ) : (
               <TransactionTable 
@@ -782,6 +1210,7 @@ function App() {
                 handleUpdateCategory={handleUpdateCategory}
                 theme={theme}
                 darkMode={darkMode}
+                creditCardBills={realBalances.creditCardBillsDetailed || []}
               />
             )}
           </div>
@@ -822,10 +1251,34 @@ function App() {
                   </div>
                 )}
 
+                {/* Header com botão de adicionar */}
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Empréstimos</h2>
+                  <button
+                    onClick={() => handleOpenLoanModal()}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                      "flex items-center gap-2"
+                    )}
+                  >
+                    <span>+</span> Adicionar Empréstimo
+                  </button>
+                </div>
+
                 {/* Loans List */}
                 {loansData.loans.length === 0 ? (
                   <div className={clsx("rounded-2xl p-12 text-center border", theme.card, theme.cardBorder)}>
                     <p className={clsx("text-lg", theme.textMuted)}>Nenhum empréstimo encontrado</p>
+                    <button
+                      onClick={() => handleOpenLoanModal()}
+                      className={clsx(
+                        "mt-4 px-4 py-2 rounded-lg font-medium transition-all",
+                        "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80"
+                      )}
+                    >
+                      Adicionar Primeiro Empréstimo
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -843,6 +1296,16 @@ function App() {
                               )}>
                                 {loan.type}
                               </span>
+                              {loan.isPaidOff && (
+                                <span className="px-3 py-1 rounded-full text-xs font-medium bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/30">
+                                  ✓ QUITADO
+                                </span>
+                              )}
+                              {loan.isManual && (
+                                <span className="px-3 py-1 rounded-full text-xs font-medium bg-[#7B61FF]/20 text-[#7B61FF] border border-[#7B61FF]/30">
+                                  Manual
+                                </span>
+                              )}
                               <h3 className={clsx("text-lg font-semibold", theme.text)}>{loan.description}</h3>
                             </div>
                             <div className="flex items-center gap-4 text-sm">
@@ -854,9 +1317,42 @@ function App() {
                               </span>
                             </div>
                           </div>
-                          <div className="text-right">
+                          <div className="text-right flex flex-col items-end gap-2">
                             <p className={clsx("text-2xl font-bold mb-1", theme.text)}>{formatCurrency(loan.totalAmount)}</p>
                             <p className={clsx("text-xs", theme.textMuted)}>Valor Total</p>
+                            <div className="flex gap-2 mt-2">
+                              <button
+                                onClick={() => handleOpenLoanModal(loan)}
+                                className={clsx(
+                                  "px-3 py-1 rounded text-xs font-medium transition-all",
+                                  "bg-[#7B61FF]/20 text-[#7B61FF] hover:bg-[#7B61FF]/30"
+                                )}
+                              >
+                                Editar
+                              </button>
+                              {loan.isManual && (
+                                <>
+                                  <button
+                                    onClick={() => handleOpenTransactionModal(loan)}
+                                    className={clsx(
+                                      "px-3 py-1 rounded text-xs font-medium transition-all",
+                                      "bg-[#00FF94]/20 text-[#00FF94] hover:bg-[#00FF94]/30"
+                                    )}
+                                  >
+                                    + Pagamento
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteLoan(loan.id)}
+                                    className={clsx(
+                                      "px-3 py-1 rounded text-xs font-medium transition-all",
+                                      "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30"
+                                    )}
+                                  >
+                                    Deletar
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -886,7 +1382,9 @@ function App() {
                           </div>
                           <div>
                             <p className={clsx("text-xs uppercase tracking-wider mb-1", theme.textMuted)}>Faltante</p>
-                            <p className={clsx("text-lg font-semibold text-[#FF4757]", theme.text)}>{formatCurrency(loan.remainingAmount)}</p>
+                            <p className={clsx("text-lg font-semibold", loan.isPaidOff ? "text-[#00FF94]" : "text-[#FF4757]", theme.text)}>
+                              {loan.isPaidOff ? "R$ 0,00" : formatCurrency(loan.remainingAmount)}
+                            </p>
                           </div>
                           <div>
                             <p className={clsx("text-xs uppercase tracking-wider mb-1", theme.textMuted)}>Parcelas Restantes</p>
@@ -895,24 +1393,215 @@ function App() {
                         </div>
 
                         {/* Transactions List (Collapsible) */}
-                        {loan.transactions.length > 0 && (
-                          <details className="mt-4">
-                            <summary className={clsx("cursor-pointer text-sm font-medium mb-2", theme.textMuted, "hover:" + (darkMode ? "text-white" : "text-black"))}>
-                              Ver {loan.transactions.length} transação(ões)
+                        {loan.transactions && loan.transactions.length > 0 && (
+                          <details className="mt-4 pt-4 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
+                            <summary className={clsx("cursor-pointer text-sm font-medium mb-3 list-none flex items-center justify-between", theme.text, "hover:opacity-70 transition-opacity")}>
+                              <span>Transações de Pagamento ({loan.transactions.length})</span>
+                              <span className="text-xs">▼</span>
                             </summary>
                             <div className="mt-3 space-y-2">
                               {loan.transactions.map((tx) => (
                                 <div key={tx.id} className={clsx("flex items-center justify-between p-3 rounded-lg", darkMode ? "bg-white/5" : "bg-black/5")}>
-                                  <div>
-                                    <p className={clsx("text-sm", theme.text)}>{formatDate(tx.date)}</p>
-                                    <p className={clsx("text-xs", theme.textMuted)}>{tx.description}</p>
+                                  <div className="flex-1">
+                                    <p className={clsx("text-sm font-medium", theme.text)}>{tx.description || `Parcela ${tx.installment_number || ''}`}</p>
+                                    <p className={clsx("text-xs", theme.textMuted)}>{formatDate(tx.date)}</p>
                                   </div>
-                                  <p className={clsx("text-sm font-medium text-[#FF4757]", theme.text)}>{formatCurrency(tx.amount)}</p>
+                                  <div className="flex items-center gap-3">
+                                    <p className={clsx("text-sm font-semibold text-[#00FF94]", theme.text)}>{formatCurrency(tx.amount)}</p>
+                                    {loan.isManual && (
+                                      <button
+                                        onClick={() => handleDeleteTransaction(loan.id, tx.id)}
+                                        className={clsx(
+                                          "px-2 py-1 rounded text-xs font-medium transition-all",
+                                          "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30"
+                                        )}
+                                      >
+                                        ✕
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
                           </details>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Goals Tab */}
+        {activeTab === 'goals' && (
+          <div className="space-y-6">
+            {goalsData.loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-10 h-10 border-2 border-[#00D4FF]/30 border-t-[#00D4FF] rounded-full animate-spin"></div>
+              </div>
+            ) : goalsData.error ? (
+              <div className={clsx("p-4 rounded-lg border", theme.card, theme.cardBorder)}>
+                <p className="text-[#FF4757]">Erro: {goalsData.error}</p>
+              </div>
+            ) : (
+              <>
+                {/* Header com botão de adicionar */}
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Metas de Gastos</h2>
+                  <button
+                    onClick={() => handleOpenGoalModal()}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#FFB800] text-white hover:bg-[#FFB800]/80",
+                      "flex items-center gap-2"
+                    )}
+                  >
+                    <span>+</span> Adicionar Meta
+                  </button>
+                </div>
+
+                {/* Goals List */}
+                {goalsData.goals.length === 0 ? (
+                  <div className={clsx("rounded-2xl p-12 text-center border", theme.card, theme.cardBorder)}>
+                    <p className={clsx("text-lg", theme.textMuted)}>Nenhuma meta encontrada</p>
+                    <button
+                      onClick={() => handleOpenGoalModal()}
+                      className={clsx(
+                        "mt-4 px-4 py-2 rounded-lg font-medium transition-all",
+                        "bg-[#FFB800] text-white hover:bg-[#FFB800]/80"
+                      )}
+                    >
+                      Adicionar Primeira Meta
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {goalsData.goals.map((goal) => (
+                      <div key={goal.id} className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.02] transition-transform duration-200")}>
+                        {/* Background gradient effect */}
+                        <div className={clsx(
+                          "absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-10 -z-0",
+                          goal.isOverBudget ? "bg-[#FF4757]" : goal.progress >= 100 ? "bg-[#00FF94]" : "bg-[#FFB800]"
+                        )}></div>
+                        
+                        <div className="relative z-10">
+                          {/* Header */}
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-3">
+                                {goal.isOverBudget ? (
+                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#FF4757]/20 text-[#FF4757] border border-[#FF4757]/40 flex items-center gap-1.5">
+                                    <span>▲</span> ACIMA DO ORÇAMENTO
+                                  </span>
+                                ) : goal.progress >= 100 ? (
+                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/40 flex items-center gap-1.5">
+                                    <span>✓</span> META ATINGIDA
+                                  </span>
+                                ) : (
+                                  <span className={clsx("px-3 py-1.5 rounded-full text-xs font-medium", darkMode ? "bg-white/5 text-white/70" : "bg-black/5 text-black/70")}>
+                                    Em andamento
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className={clsx("text-xl font-bold mb-1", theme.text)}>{goal.name}</h3>
+                              <p className={clsx("text-xs font-medium", theme.textMuted)}>
+                                {goal.periodLabel || `${goal.periodMonth}/${goal.periodYear}`}
+                              </p>
+                            </div>
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => handleOpenGoalModal(goal)}
+                                className={clsx(
+                                  "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                  "bg-[#7B61FF]/20 text-[#7B61FF] hover:bg-[#7B61FF]/30 border border-[#7B61FF]/30"
+                                )}
+                                title="Editar"
+                              >
+                                ✎
+                              </button>
+                              <button
+                                onClick={() => handleDeleteGoal(goal.id)}
+                                className={clsx(
+                                  "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                  "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30 border border-[#FF4757]/30"
+                                )}
+                                title="Deletar"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Amount Display */}
+                          <div className="mb-4">
+                            <div className="flex items-baseline gap-2 mb-1">
+                              <span className={clsx("text-2xl font-bold", goal.isOverBudget ? "text-[#FF4757]" : "text-[#00FF94]", theme.text)}>
+                                {formatCurrency(goal.currentAmount)}
+                              </span>
+                              <span className={clsx("text-sm", theme.textMuted)}>
+                                / {formatCurrency(goal.targetAmount)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className={clsx("text-xs font-medium", theme.textMuted)}>
+                                {goal.progress.toFixed(1)}% do orçamento
+                              </span>
+                              {goal.isOverBudget && (
+                                <span className="text-xs font-bold text-[#FF4757]">
+                                  +{formatCurrency(goal.overBudgetAmount)} acima
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Progress Bar */}
+                          <div className="mb-4">
+                            <div className={clsx("h-4 rounded-full overflow-hidden relative", darkMode ? "bg-white/10" : "bg-black/10")}>
+                              <div 
+                                className={clsx(
+                                  "h-full transition-all duration-500 rounded-full",
+                                  goal.isOverBudget ? "bg-gradient-to-r from-[#FF4757] to-[#FF6B7A]" : 
+                                  goal.progress >= 100 ? "bg-gradient-to-r from-[#00FF94] to-[#00D4AA]" : 
+                                  "bg-gradient-to-r from-[#FFB800] via-[#FF9500] to-[#FF6B00]"
+                                )}
+                                style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }}
+                              ></div>
+                              {goal.progress > 100 && (
+                                <div 
+                                  className="absolute top-0 left-0 h-full w-full bg-gradient-to-r from-[#FF4757] to-[#FF6B7A] opacity-50 rounded-full"
+                                  style={{ width: `${Math.min(100, ((goal.progress - 100) / goal.progress) * 100)}%` }}
+                                ></div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Details Grid */}
+                          <div className="grid grid-cols-2 gap-3 pt-4 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
+                            <div>
+                              <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Valor Teto</p>
+                              <p className={clsx("text-sm font-semibold", theme.text)}>
+                                {formatCurrency(goal.targetAmount)}
+                              </p>
+                            </div>
+                            {goal.isOverBudget ? (
+                              <div>
+                                <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Excedente</p>
+                                <p className="text-sm font-semibold text-[#FF4757]">
+                                  +{formatCurrency(goal.overBudgetAmount)}
+                                </p>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Disponível</p>
+                                <p className="text-sm font-semibold text-[#00FF94]">
+                                  {formatCurrency(goal.remaining)}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -992,28 +1681,698 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Loan Modal */}
+      {showLoanModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+          <div className={clsx("relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                {editingLoan ? 'Editar Empréstimo' : 'Adicionar Empréstimo'}
+              </h2>
+              <button 
+                onClick={handleCloseLoanModal}
+                className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Descrição *</label>
+                <input
+                  type="text"
+                  value={loanForm.description}
+                  onChange={(e) => setLoanForm({ ...loanForm, description: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="Ex: Empréstimo Consignado"
+                />
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Tipo</label>
+                <select
+                  value={loanForm.type}
+                  onChange={(e) => setLoanForm({ ...loanForm, type: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                >
+                  <option value="Outro">Outro</option>
+                  <option value="Consignado">Consignado</option>
+                  <option value="Pessoal">Pessoal</option>
+                  <option value="Imobiliário">Imobiliário</option>
+                  <option value="Veículo">Veículo</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Banco</label>
+                  <input
+                    type="text"
+                    value={loanForm.bankName}
+                    onChange={(e) => setLoanForm({ ...loanForm, bankName: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: Nubank"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>De Quem É</label>
+                  <select
+                    value={loanForm.ownerName}
+                    onChange={(e) => setLoanForm({ ...loanForm, ownerName: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  >
+                    <option value="">Selecione</option>
+                    <option value="Robert Oliveira">Robert Oliveira</option>
+                    <option value="Larissa">Larissa</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor Total *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={loanForm.totalAmount}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setLoanForm({ 
+                        ...loanForm, 
+                        totalAmount: value,
+                        installmentValue: loanForm.totalInstallments ? (parseFloat(value) / parseInt(loanForm.totalInstallments)).toFixed(2) : loanForm.installmentValue
+                      });
+                    }}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Total de Parcelas *</label>
+                  <input
+                    type="number"
+                    value={loanForm.totalInstallments}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setLoanForm({ 
+                        ...loanForm, 
+                        totalInstallments: value,
+                        installmentValue: value && loanForm.totalAmount ? (parseFloat(loanForm.totalAmount) / parseInt(value)).toFixed(2) : loanForm.installmentValue
+                      });
+                    }}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Parcelas Pagas</label>
+                  <input
+                    type="number"
+                    value={loanForm.paidInstallments}
+                    onChange={(e) => setLoanForm({ ...loanForm, paidInstallments: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor da Parcela</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={loanForm.installmentValue}
+                    onChange={(e) => setLoanForm({ ...loanForm, installmentValue: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Taxa de Juros ao Ano (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={loanForm.interestRate}
+                    onChange={(e) => setLoanForm({ ...loanForm, interestRate: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: 12.5"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Dia de Vencimento</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={loanForm.dueDate}
+                    onChange={(e) => {
+                      const day = e.target.value;
+                      if (day === '' || (parseInt(day) >= 1 && parseInt(day) <= 31)) {
+                        setLoanForm({ ...loanForm, dueDate: day });
+                      }
+                    }}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: 15"
+                  />
+                  <p className={clsx("text-xs mt-1", theme.textMuted)}>Dia do mês (1-31)</p>
+                </div>
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Forma de Pagamento</label>
+                <select
+                  value={loanForm.paymentMethod}
+                  onChange={(e) => setLoanForm({ ...loanForm, paymentMethod: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                >
+                  <option value="">Selecione</option>
+                  <option value="Débito Automático">Débito Automático</option>
+                  <option value="Desconto em Folha">Desconto em Folha</option>
+                  <option value="Boleto">Boleto</option>
+                  <option value="PIX">PIX</option>
+                  <option value="Transferência">Transferência</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                  <option value="Outro">Outro</option>
+                </select>
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={handleCloseLoanModal}
+                  className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveLoan}
+                  disabled={!loanForm.description || !loanForm.totalAmount || !loanForm.totalInstallments}
+                  className={clsx(
+                    "px-4 py-2 rounded-lg font-medium transition-all",
+                    "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  {editingLoan ? 'Salvar Alterações' : 'Adicionar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction Modal */}
+      {showTransactionModal && selectedLoanForTransaction && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+          <div className={clsx("relative w-full max-w-md rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                Adicionar Pagamento
+              </h2>
+              <button 
+                onClick={handleCloseTransactionModal}
+                className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Data *</label>
+                <input
+                  type="date"
+                  value={transactionForm.date}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, date: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={transactionForm.amount}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, amount: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Número da Parcela</label>
+                  <input
+                    type="number"
+                    value={transactionForm.installmentNumber}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, installmentNumber: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: 1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Descrição</label>
+                <input
+                  type="text"
+                  value={transactionForm.description}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, description: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="Ex: Parcela 1/150"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={handleCloseTransactionModal}
+                  className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveTransaction}
+                  disabled={!transactionForm.date || !transactionForm.amount}
+                  className={clsx(
+                    "px-4 py-2 rounded-lg font-medium transition-all",
+                    "bg-[#00FF94] text-white hover:bg-[#00FF94]/80",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  Adicionar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction Modal */}
+      {showTransactionModal && selectedLoanForTransaction && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+          <div className={clsx("relative w-full max-w-md rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                Adicionar Pagamento
+              </h2>
+              <button 
+                onClick={handleCloseTransactionModal}
+                className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Data *</label>
+                <input
+                  type="date"
+                  value={transactionForm.date}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, date: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={transactionForm.amount}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, amount: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Número da Parcela</label>
+                  <input
+                    type="number"
+                    value={transactionForm.installmentNumber}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, installmentNumber: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: 1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Descrição</label>
+                <input
+                  type="text"
+                  value={transactionForm.description}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, description: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="Ex: Parcela 1/150"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={handleCloseTransactionModal}
+                  className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveTransaction}
+                  disabled={!transactionForm.date || !transactionForm.amount}
+                  className={clsx(
+                    "px-4 py-2 rounded-lg font-medium transition-all",
+                    "bg-[#00FF94] text-white hover:bg-[#00FF94]/80",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  Adicionar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Goal Modal */}
+      {showGoalModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+          <div className={clsx("relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                {editingGoal ? 'Editar Meta' : 'Adicionar Meta'}
+              </h2>
+              <button 
+                onClick={handleCloseGoalModal}
+                className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Nome da Meta (Categoria) *</label>
+                <select
+                  value={goalForm.name}
+                  onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                >
+                  <option value="">Selecione uma categoria</option>
+                  <option value="Refeição">Refeição</option>
+                  <option value="Transporte">Transporte</option>
+                  <option value="Moradia">Moradia</option>
+                  <option value="Saúde">Saúde</option>
+                  <option value="Farmácia">Farmácia</option>
+                  <option value="Compras">Compras</option>
+                  <option value="Entretenimento">Entretenimento</option>
+                  <option value="Educação">Educação</option>
+                  <option value="Serviços">Serviços</option>
+                  <option value="Pet">Pet</option>
+                  <option value="Feira">Feira</option>
+                  <option value="Mercado">Mercado</option>
+                  <option value="Fatura">Fatura</option>
+                  <option value="Empréstimo">Empréstimo</option>
+                  <option value="Transferência">Transferência</option>
+                  <option value="Investimentos">Investimentos</option>
+                  <option value="Outros">Outros</option>
+                </select>
+                <p className={clsx("text-xs mt-1", theme.textMuted)}>O sistema calculará automaticamente os gastos desta categoria</p>
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor Teto *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={goalForm.targetAmount}
+                  onChange={(e) => setGoalForm({ ...goalForm, targetAmount: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Mês *</label>
+                  <select
+                    value={goalForm.periodMonth}
+                    onChange={(e) => setGoalForm({ ...goalForm, periodMonth: parseInt(e.target.value) })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  >
+                    <option value="1">Janeiro</option>
+                    <option value="2">Fevereiro</option>
+                    <option value="3">Março</option>
+                    <option value="4">Abril</option>
+                    <option value="5">Maio</option>
+                    <option value="6">Junho</option>
+                    <option value="7">Julho</option>
+                    <option value="8">Agosto</option>
+                    <option value="9">Setembro</option>
+                    <option value="10">Outubro</option>
+                    <option value="11">Novembro</option>
+                    <option value="12">Dezembro</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Ano *</label>
+                  <input
+                    type="number"
+                    value={goalForm.periodYear}
+                    onChange={(e) => setGoalForm({ ...goalForm, periodYear: parseInt(e.target.value) })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="2025"
+                    min="2020"
+                    max="2100"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={handleCloseGoalModal}
+                  className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveGoal}
+                  disabled={!goalForm.name || !goalForm.targetAmount || !goalForm.periodMonth || !goalForm.periodYear}
+                  className={clsx(
+                    "px-4 py-2 rounded-lg font-medium transition-all",
+                    "bg-[#FFB800] text-white hover:bg-[#FFB800]/80",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  {editingGoal ? 'Salvar Alterações' : 'Adicionar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+// Função auxiliar para calcular primeiro dia útil do mês
+function getFirstBusinessDay(year, month) {
+  // month é 1-indexed (1 = Janeiro, 12 = Dezembro)
+  const monthIndex = month - 1; // Converter para 0-indexed
+  const firstDay = new Date(year, monthIndex, 1);
+  const dayOfWeek = firstDay.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  
+  if (dayOfWeek === 0) {
+    // Se dia 1 é domingo, primeiro dia útil é dia 2 (segunda)
+    return 2;
+  } else if (dayOfWeek === 6) {
+    // Se dia 1 é sábado, primeiro dia útil é dia 3 (segunda)
+    return 3;
+  } else {
+    // Se dia 1 é segunda a sexta, primeiro dia útil é dia 1
+    return 1;
+  }
+}
+
+// Função para verificar se uma transação deve ser ignorada no resumo
+function shouldIgnorePayment(tx, allTransactions, creditCardBills = []) {
+  // Verificar apenas transações positivas (entradas)
+  if (tx.amount <= 0) {
+    return false;
+  }
+  
+  // Verificar se é cartão de crédito
+  if (tx.account_type !== 'CREDIT') {
+    return false;
+  }
+  
+  const txDate = new Date(tx.date);
+  const txYear = txDate.getFullYear();
+  const txMonth = txDate.getMonth() + 1; // 1-indexed
+  const txDay = txDate.getDate();
+  
+  // Ignorar pagamentos no primeiro dia útil do mês
+  const firstBusinessDay = getFirstBusinessDay(txYear, txMonth);
+  if (txDay === firstBusinessDay) {
+    return true;
+  }
+  
+  // Para Larissa, também ignorar no dia de fechamento da fatura
+  if (tx.owner_name === 'Larissa Purkot') {
+    let closingDay;
+    if (tx.bank_name === 'Itaú') {
+      closingDay = 26; // Itaú Larissa fecha dia 26
+    } else if (tx.bank_name === 'Nubank') {
+      closingDay = 26; // Nubank Larissa fecha dia 26
+    }
+    
+    if (closingDay && txDay === closingDay) {
+      return true;
+    }
+  }
+  
+  // Comparar com TODAS as faturas anteriores que correspondem a este cartão
+  // Verificar se o valor da entrada corresponde a alguma fatura anterior
+  const tolerance = 0.01;
+  const txAmount = Math.abs(tx.amount);
+  
+  for (const bill of creditCardBills) {
+    // Verificar se corresponde ao mesmo cartão (banco + pessoa)
+    if (bill.bankName === tx.bank_name && bill.ownerName === tx.owner_name) {
+      const billAmount = Math.abs(bill.total || 0);
+      
+      // Se o valor corresponde (dentro da tolerância)
+      if (billAmount > 0 && Math.abs(txAmount - billAmount) <= tolerance) {
+        // Se a fatura está fechada (isOpen = false), definitivamente ignorar
+        if (bill.isOpen === false) {
+          return true;
+        }
+        
+        // Se não tem informação de isOpen ou está undefined, verificar pela data
+        // Se a fatura tem data de vencimento e a transação é anterior ou igual, ignorar
+        if (bill.isOpen === undefined || bill.isOpen === null) {
+          if (bill.dueDate) {
+            const dueDate = new Date(bill.dueDate);
+            // Se a transação é anterior ou igual à data de vencimento, é pagamento de fatura anterior
+            if (txDate <= dueDate) {
+              return true;
+            }
+          } else {
+            // Se não tem data mas o valor corresponde, assumir que é fatura anterior
+            return true;
+          }
+        }
+        
+        // Se a fatura está aberta mas o valor corresponde exatamente
+        // Verificar se a data da transação é anterior à data de vencimento
+        if (bill.isOpen === true && bill.dueDate) {
+          const dueDate = new Date(bill.dueDate);
+          // Se pagou antes do vencimento, é pagamento de fatura anterior
+          if (txDate < dueDate) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  
+  return false;
+}
+
 // Transaction Table Component
-function TransactionTable({ transactions, title, formatCurrency, formatDate, editingCategory, setEditingCategory, newCategory, setNewCategory, handleUpdateCategory, theme = {}, darkMode = true }) {
+function TransactionTable({ transactions, title, formatCurrency, formatDate, editingCategory, setEditingCategory, newCategory, setNewCategory, handleUpdateCategory, theme = {}, darkMode = true, creditCardBills = [] }) {
+  // Calcular totais, excluindo pagamentos de faturas anteriores
+  const totals = useMemo(() => {
+    // Filtrar transações que devem ser ignoradas no resumo
+    const filteredTransactions = transactions.filter(tx => !shouldIgnorePayment(tx, transactions, creditCardBills));
+    
+    const entradas = filteredTransactions.filter(tx => tx.amount > 0);
+    const saidas = filteredTransactions.filter(tx => tx.amount < 0);
+    const totalEntradas = entradas.reduce((sum, tx) => sum + tx.amount, 0);
+    const totalSaidas = saidas.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+    
+    // Calcular total: entradas - saídas
+    const total = totalEntradas - totalSaidas;
+    
+    // Contar também as transações ignoradas para informação
+    const ignoredPayments = transactions.filter(tx => shouldIgnorePayment(tx, transactions, creditCardBills));
+    
+    return {
+      numEntradas: entradas.length,
+      numSaidas: saidas.length,
+      totalEntradas,
+      totalSaidas,
+      total,
+      ignoredCount: ignoredPayments.length,
+      ignoredAmount: ignoredPayments.reduce((sum, tx) => sum + tx.amount, 0)
+    };
+  }, [transactions, creditCardBills]);
+
+  // Função para exportar CSV
+  const exportToCSV = () => {
+    const headers = ['Data', 'Banco', 'Pessoa', 'Descrição', 'Categoria', 'Valor'];
+    const rows = transactions.map(tx => [
+      formatDate(tx.date),
+      tx.bank_name || '',
+      tx.owner_name || '',
+      tx.description || '',
+      tx.category || '',
+      tx.amount.toFixed(2)
+    ]);
+    
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+    
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${title.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className={clsx("rounded-2xl overflow-hidden border", theme.card || "bg-white/[0.02]", theme.cardBorder || "border-white/5")}>
       <div className={clsx("px-6 py-4 border-b flex items-center justify-between", theme.border || "border-white/5")}>
         <h3 className={clsx("text-sm font-medium uppercase tracking-wider", darkMode ? "text-white/80" : "text-black/80")}>{title}</h3>
-        <span className="text-xs text-[#64748b]">{transactions.length} transações</span>
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-[#64748b]">{transactions.length} transações</span>
+          <button
+            onClick={exportToCSV}
+            className={clsx(
+              "px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2",
+              darkMode 
+                ? "bg-white/5 hover:bg-white/10 text-white/80 hover:text-white border border-white/10" 
+                : "bg-black/5 hover:bg-black/10 text-black/80 hover:text-black border border-black/10"
+            )}
+            title="Exportar para CSV"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            CSV
+          </button>
+        </div>
       </div>
-      <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+      <div className="overflow-x-auto max-h-[400px] overflow-y-auto relative">
         <table className="w-full">
-          <thead className={clsx("sticky top-0", theme.card || "bg-white/[0.02]")}>
+          <thead className={clsx("sticky top-0 z-10", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
             <tr>
-              <th className="px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Data</th>
-              <th className="px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Banco</th>
-              <th className="px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Pessoa</th>
-              <th className="px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Descrição</th>
-              <th className="px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Categoria</th>
-              <th className="px-4 py-3 text-right text-[10px] font-medium text-[#64748b] uppercase tracking-wider">Valor</th>
+              <th className={clsx("px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Data</th>
+              <th className={clsx("px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Banco</th>
+              <th className={clsx("px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Pessoa</th>
+              <th className={clsx("px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Descrição</th>
+              <th className={clsx("px-4 py-3 text-left text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Categoria</th>
+              <th className={clsx("px-4 py-3 text-right text-[10px] font-medium text-[#64748b] uppercase tracking-wider", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>Valor</th>
             </tr>
           </thead>
           <tbody className={clsx("divide-y", theme.border || "divide-white/5")}>
@@ -1065,6 +2424,41 @@ function TransactionTable({ transactions, title, formatCurrency, formatDate, edi
               ))
             )}
           </tbody>
+          {/* Linha de totais */}
+          {transactions.length > 0 && (
+            <tfoot className={clsx("border-t-2 sticky bottom-0 z-10", theme.border || "border-white/10", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
+              <tr className={clsx(darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
+                <td colSpan="3" className={clsx("px-4 py-3", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
+                  <div className="flex flex-col gap-1">
+                    <div className={clsx("text-xs font-medium", darkMode ? "text-white/80" : "text-black/80")}>
+                      Resumo
+                    </div>
+                    <div className={clsx("text-[10px] flex gap-3", darkMode ? "text-white/60" : "text-black/60")}>
+                      <span>Entradas: <span className={clsx("font-semibold", darkMode ? "text-white/90" : "text-black/90")}>{totals.numEntradas}</span></span>
+                      <span>Saídas: <span className={clsx("font-semibold", darkMode ? "text-white/90" : "text-black/90")}>{totals.numSaidas}</span></span>
+                    </div>
+                  </div>
+                </td>
+                <td className={clsx("px-4 py-3", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}></td>
+                <td className={clsx("px-4 py-3 text-right", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
+                  <div className={clsx("text-xs font-medium", darkMode ? "text-white/60" : "text-black/60")}>
+                    Total
+                  </div>
+                </td>
+                <td className={clsx("px-4 py-3 text-right", darkMode ? "bg-[#0a0a0f]" : "bg-[#f8fafc]")}>
+                  <div className="flex flex-col items-end gap-1">
+                    <div className={clsx("text-sm font-bold", totals.total >= 0 ? "text-[#00FF94]" : "text-[#FF4757]")}>
+                      {formatCurrency(totals.total)}
+                    </div>
+                    <div className={clsx("text-[10px] flex gap-2", darkMode ? "text-white/50" : "text-black/50")}>
+                      <span className="text-[#00FF94]">+{formatCurrency(totals.totalEntradas)}</span>
+                      <span className="text-[#FF4757]">-{formatCurrency(totals.totalSaidas)}</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>

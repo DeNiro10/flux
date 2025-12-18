@@ -307,5 +307,149 @@ export const api = {
     }
     return response.json();
   },
+
+  createLoan: async (loan) => {
+    const response = await fetch(`${API_BASE}/loans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar empréstimo');
+    }
+    return response.json();
+  },
+
+  updateLoan: async (id, loan) => {
+    const response = await fetch(`${API_BASE}/loans/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(loan),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar empréstimo');
+    }
+    return response.json();
+  },
+
+  deleteLoan: async (id) => {
+    const response = await fetch(`${API_BASE}/loans/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar empréstimo');
+    }
+    return response.json();
+  },
+
+  addLoanTransaction: async (loanId, transaction) => {
+    const response = await fetch(`${API_BASE}/loans/${loanId}/transactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(transaction),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao adicionar transação');
+    }
+    return response.json();
+  },
+
+  deleteLoanTransaction: async (loanId, transactionId) => {
+    const response = await fetch(`${API_BASE}/loans/${loanId}/transactions/${transactionId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar transação');
+    }
+    return response.json();
+  },
+
+  // Metas
+  getGoals: async (period = '') => {
+    const response = await fetch(`${API_BASE}/goals${period}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar metas');
+    }
+    return response.json();
+  },
+
+  createGoal: async (goal) => {
+    const response = await fetch(`${API_BASE}/goals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(goal),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar meta');
+    }
+    return response.json();
+  },
+
+  updateGoal: async (id, goal) => {
+    const response = await fetch(`${API_BASE}/goals/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(goal),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar meta');
+    }
+    return response.json();
+  },
+
+  deleteGoal: async (id) => {
+    const response = await fetch(`${API_BASE}/goals/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar meta');
+    }
+    return response.json();
+  },
+
+  // Corrigir transações com legumes de Refeição para Feira
+  fixLegumesCategory: async () => {
+    const response = await fetch(`${API_BASE}/transactions/fix-legumes`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao corrigir categorias de legumes');
+    }
+    return response.json();
+  },
+
+  // Corrigir transações relacionadas a mercado para Mercado
+  fixMercadoCategory: async () => {
+    const response = await fetch(`${API_BASE}/transactions/fix-mercado`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao corrigir categorias de mercado');
+    }
+    return response.json();
+  },
+
+  // Corrigir transações de Mercado Livre que foram incorretamente categorizadas como Mercado
+  fixMercadoLivreCategory: async () => {
+    const response = await fetch(`${API_BASE}/transactions/fix-mercado-livre`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao corrigir Mercado Livre');
+    }
+    return response.json();
+  },
 };
 
