@@ -1,9 +1,10 @@
 FROM node:24-alpine
 
 # Instalar dependências do sistema necessárias para better-sqlite3
-# Incluindo python3, make, g++, build-base (toolchain completo), sqlite-dev, e git
+# Incluindo python3, py3-setuptools (contém distutils), make, g++, build-base, sqlite-dev, e git
 RUN apk add --no-cache \
     python3 \
+    py3-setuptools \
     make \
     g++ \
     build-base \
@@ -22,8 +23,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalar dependências (incluindo devDependencies)
-# Usar --build-from-source para garantir compilação correta do better-sqlite3
-RUN npm install --include=dev --build-from-source
+RUN npm install --include=dev
 
 # Copiar código da aplicação
 COPY . .
