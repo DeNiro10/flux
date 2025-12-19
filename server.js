@@ -1065,123 +1065,203 @@ function getDashboardData(filters = {}) {
     let creditCardBill = 0;
     if (period && period !== 'all') {
       const [year, month] = period.split('-').map(Number);
-      const cycle = getCyclePeriod(year, month);
       
-      // Calcular gastos (valores negativos)
-      const gastosResult = database.prepare(`
-        SELECT SUM(ABS(amount)) as total FROM transactions 
-        WHERE account_type = 'CREDIT' AND amount < 0 AND date >= ? AND date <= ?
-      `).get(cycle.start, cycle.end);
-      const gastos = gastosResult?.total || 0;
-      
-      // Calcular créditos (valores positivos), EXCLUINDO pagamentos de fatura anterior
-      // Buscar faturas fechadas anteriores para comparar valores
-      const previousBills = database.prepare(`
-        SELECT DISTINCT 
-          bank_name, 
-          owner_name,
-          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) - 
-          SUM(CASE WHEN amount > 0 AND description NOT LIKE '%Pagamento recebido%' THEN amount ELSE 0 END) as bill_amount
-        FROM transactions
-        WHERE account_type = 'CREDIT'
-          AND date < ?
-          AND category = 'Fatura'
-        GROUP BY bank_name, owner_name
-        HAVING bill_amount > 0
-      `).all(cycle.start);
-      
-      // Calcular créditos excluindo pagamentos que correspondem a faturas anteriores
-      let creditosQuery = `
-        SELECT SUM(amount) as total FROM transactions 
+      // Buscar todos os cartões únicos
+      const uniqueCards = database.prepare(`
+        SELECT DISTINCT bank_name, owner_name 
+        FROM transactions 
         WHERE account_type = 'CREDIT' 
-          AND amount > 0 
-          AND date >= ? 
-          AND date <= ?
-          AND description NOT LIKE '%Pagamento recebido%'
-      `;
-      let creditosParams = [cycle.start, cycle.end];
+          AND bank_name IS NOT NULL 
+          AND owner_name IS NOT NULL
+      `).all();
       
-      // Excluir pagamentos que correspondem a faturas anteriores (tolerância de 0.01)
+      let totalGastos = 0;
+      let totalCreditos = 0;
       const tolerance = 0.01;
-      if (previousBills.length > 0) {
-        const excludeConditions = [];
-        for (const bill of previousBills) {
-          const billAmount = bill.bill_amount || 0;
-          if (billAmount > 0) {
-            const minAmount = billAmount - tolerance;
-            const maxAmount = billAmount + tolerance;
-            excludeConditions.push(`NOT (bank_name = ? AND owner_name = ? AND ABS(amount) >= ? AND ABS(amount) <= ?)`);
-            creditosParams.push(bill.bank_name, bill.owner_name, minAmount, maxAmount);
-          }
+      
+      // Para cada cartão, calcular gastos e créditos do período atual
+      for (const card of uniqueCards) {
+        const cardCycle = getCardCyclePeriod(year, month, card.bank_name, card.owner_name);
+        
+        // Gastos do período atual deste cartão
+        const gastosCard = database.prepare(`
+          SELECT SUM(ABS(amount)) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount < 0 
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+        totalGastos += gastosCard?.total || 0;
+        
+        // Calcular fatura do período ANTERIOR para este cartão
+        let prevYear = year;
+        let prevMonth = month - 1;
+        if (prevMonth === 0) {
+          prevMonth = 12;
+          prevYear = year - 1;
         }
-        if (excludeConditions.length > 0) {
-          creditosQuery += ` AND ${excludeConditions.join(' AND ')}`;
+        const prevCardCycle = getCardCyclePeriod(prevYear, prevMonth, card.bank_name, card.owner_name);
+        
+        // Calcular fatura anterior: gastos - créditos do período anterior
+        const prevGastos = database.prepare(`
+          SELECT SUM(ABS(amount)) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount < 0 
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
+        
+        const prevCreditos = database.prepare(`
+          SELECT SUM(amount) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount > 0 
+            AND description NOT LIKE '%Pagamento recebido%'
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
+        
+        const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
+        
+        // Créditos do período atual, EXCLUINDO pagamentos que correspondem à fatura anterior
+        if (prevBillAmount > 0) {
+          const minAmount = prevBillAmount - tolerance;
+          const maxAmount = prevBillAmount + tolerance;
+          
+          const creditosCard = database.prepare(`
+            SELECT SUM(amount) as total FROM transactions 
+            WHERE account_type = 'CREDIT' 
+              AND bank_name = ? 
+              AND owner_name = ?
+              AND amount > 0 
+              AND date >= ? 
+              AND date <= ?
+              AND description NOT LIKE '%Pagamento recebido%'
+              AND NOT (ABS(amount) >= ? AND ABS(amount) <= ?)
+          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end, minAmount, maxAmount);
+          totalCreditos += creditosCard?.total || 0;
+        } else {
+          // Se não há fatura anterior, contar todos os créditos (exceto "Pagamento recebido")
+          const creditosCard = database.prepare(`
+            SELECT SUM(amount) as total FROM transactions 
+            WHERE account_type = 'CREDIT' 
+              AND bank_name = ? 
+              AND owner_name = ?
+              AND amount > 0 
+              AND date >= ? 
+              AND date <= ?
+              AND description NOT LIKE '%Pagamento recebido%'
+          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+          totalCreditos += creditosCard?.total || 0;
         }
       }
       
-      const creditosResult = database.prepare(creditosQuery).get(...creditosParams);
-      const creditos = creditosResult?.total || 0;
-      
-      // Fatura = Gastos - Créditos (excluindo pagamentos de fatura anterior)
-      creditCardBill = gastos - creditos;
+      // Fatura total = Gastos - Créditos (excluindo pagamentos de fatura anterior)
+      creditCardBill = totalGastos - totalCreditos;
     } else {
       // Período atual
       const now = new Date();
+      const currentYear = now.getFullYear();
       const currentMonth = now.getMonth() + 1;
-      const currentCycle = getCyclePeriod(now.getFullYear(), currentMonth);
       
       // Mesma lógica para período atual
-      const gastosResult = database.prepare(`
-        SELECT SUM(ABS(amount)) as total FROM transactions 
-        WHERE account_type = 'CREDIT' AND amount < 0 AND date >= ? AND date <= ?
-      `).get(currentCycle.start, currentCycle.end);
-      const gastos = gastosResult?.total || 0;
-      
-      const previousBills = database.prepare(`
-        SELECT DISTINCT 
-          bank_name, 
-          owner_name,
-          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) - 
-          SUM(CASE WHEN amount > 0 AND description NOT LIKE '%Pagamento recebido%' THEN amount ELSE 0 END) as bill_amount
-        FROM transactions
-        WHERE account_type = 'CREDIT'
-          AND date < ?
-          AND category = 'Fatura'
-        GROUP BY bank_name, owner_name
-        HAVING bill_amount > 0
-      `).all(currentCycle.start);
-      
-      let creditosQuery = `
-        SELECT SUM(amount) as total FROM transactions 
+      const uniqueCards = database.prepare(`
+        SELECT DISTINCT bank_name, owner_name 
+        FROM transactions 
         WHERE account_type = 'CREDIT' 
-          AND amount > 0 
-          AND date >= ? 
-          AND date <= ?
-          AND description NOT LIKE '%Pagamento recebido%'
-      `;
-      let creditosParams = [currentCycle.start, currentCycle.end];
+          AND bank_name IS NOT NULL 
+          AND owner_name IS NOT NULL
+      `).all();
       
+      let totalGastos = 0;
+      let totalCreditos = 0;
       const tolerance = 0.01;
-      if (previousBills.length > 0) {
-        const excludeConditions = [];
-        for (const bill of previousBills) {
-          const billAmount = bill.bill_amount || 0;
-          if (billAmount > 0) {
-            const minAmount = billAmount - tolerance;
-            const maxAmount = billAmount + tolerance;
-            excludeConditions.push(`NOT (bank_name = ? AND owner_name = ? AND ABS(amount) >= ? AND ABS(amount) <= ?)`);
-            creditosParams.push(bill.bank_name, bill.owner_name, minAmount, maxAmount);
-          }
+      
+      for (const card of uniqueCards) {
+        const cardCycle = getCardCyclePeriod(currentYear, currentMonth, card.bank_name, card.owner_name);
+        
+        // Gastos do período atual
+        const gastosCard = database.prepare(`
+          SELECT SUM(ABS(amount)) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount < 0 
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+        totalGastos += gastosCard?.total || 0;
+        
+        // Calcular fatura do período ANTERIOR
+        let prevYear = currentYear;
+        let prevMonth = currentMonth - 1;
+        if (prevMonth === 0) {
+          prevMonth = 12;
+          prevYear = currentYear - 1;
         }
-        if (excludeConditions.length > 0) {
-          creditosQuery += ` AND ${excludeConditions.join(' AND ')}`;
+        const prevCardCycle = getCardCyclePeriod(prevYear, prevMonth, card.bank_name, card.owner_name);
+        
+        const prevGastos = database.prepare(`
+          SELECT SUM(ABS(amount)) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount < 0 
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
+        
+        const prevCreditos = database.prepare(`
+          SELECT SUM(amount) as total FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount > 0 
+            AND description NOT LIKE '%Pagamento recebido%'
+            AND date >= ? 
+            AND date <= ?
+        `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
+        
+        const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
+        
+        // Créditos do período atual, EXCLUINDO pagamentos que correspondem à fatura anterior
+        if (prevBillAmount > 0) {
+          const minAmount = prevBillAmount - tolerance;
+          const maxAmount = prevBillAmount + tolerance;
+          
+          const creditosCard = database.prepare(`
+            SELECT SUM(amount) as total FROM transactions 
+            WHERE account_type = 'CREDIT' 
+              AND bank_name = ? 
+              AND owner_name = ?
+              AND amount > 0 
+              AND date >= ? 
+              AND date <= ?
+              AND description NOT LIKE '%Pagamento recebido%'
+              AND NOT (ABS(amount) >= ? AND ABS(amount) <= ?)
+          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end, minAmount, maxAmount);
+          totalCreditos += creditosCard?.total || 0;
+        } else {
+          const creditosCard = database.prepare(`
+            SELECT SUM(amount) as total FROM transactions 
+            WHERE account_type = 'CREDIT' 
+              AND bank_name = ? 
+              AND owner_name = ?
+              AND amount > 0 
+              AND date >= ? 
+              AND date <= ?
+              AND description NOT LIKE '%Pagamento recebido%'
+          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+          totalCreditos += creditosCard?.total || 0;
         }
       }
       
-      const creditosResult = database.prepare(creditosQuery).get(...creditosParams);
-      const creditos = creditosResult?.total || 0;
-      
-      creditCardBill = gastos - creditos;
+      creditCardBill = totalGastos - totalCreditos;
     }
 
     return {
