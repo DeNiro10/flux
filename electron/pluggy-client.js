@@ -295,16 +295,50 @@ export class PluggyClient {
   }
 
   async fetchTransactions(accountId, options = {}) {
-    const params = new URLSearchParams({
-      accountId,
-      ...Object.fromEntries(
-        Object.entries(options).map(([key, value]) => [key, String(value)])
-      ),
-    });
+    let allTransactions = [];
+    let page = 1;
+    let hasMore = true;
+    const pageSize = options.pageSize || 500; // Tamanho máximo de página da API Pluggy
     
-    const response = await this.request(`/transactions?${params.toString()}`);
-    // A API pode retornar { results: [...] } ou array direto
-    return response.results || response.data || response;
+    while (hasMore) {
+      const params = new URLSearchParams({
+        accountId,
+        page: String(page),
+        pageSize: String(pageSize),
+        ...Object.fromEntries(
+          Object.entries(options)
+            .filter(([key]) => key !== 'pageSize') // Remover pageSize das opções para não duplicar
+            .map(([key, value]) => [key, String(value)])
+        ),
+      });
+      
+      const response = await this.request(`/transactions?${params.toString()}`);
+      const transactions = response.results || response.data || response;
+      
+      if (Array.isArray(transactions)) {
+        allTransactions = allTransactions.concat(transactions);
+        // Se retornou menos que pageSize, não há mais páginas
+        hasMore = transactions.length === pageSize;
+        page++;
+      } else if (transactions && typeof transactions === 'object') {
+        // Se for objeto com results e page/total
+        const results = transactions.results || [];
+        allTransactions = allTransactions.concat(results);
+        hasMore = transactions.page < transactions.totalPages && results.length > 0;
+        page++;
+      } else {
+        hasMore = false;
+      }
+      
+      // Limite de segurança para evitar loop infinito
+      if (page > 100) {
+        console.warn('[PluggyClient] Limite de páginas atingido (100)');
+        break;
+      }
+    }
+    
+    console.log(`[PluggyClient] Total de transações buscadas: ${allTransactions.length} (${page - 1} páginas)`);
+    return allTransactions;
   }
 
   // Buscar faturas de cartão de crédito

@@ -419,10 +419,11 @@ async function syncTransactions(transactions, accountId, accountInfo = {}) {
   `);
 
   // Verificar se já existe transação duplicada (mesma data, valor, descrição, banco e pessoa)
+  // Usar DATE() para normalizar a data na comparação e ROUND() para normalizar o valor
   const checkDuplicate = database.prepare(`
     SELECT id FROM transactions 
-    WHERE date = ? 
-      AND amount = ? 
+    WHERE DATE(date) = DATE(?) 
+      AND ROUND(amount, 2) = ROUND(?, 2)
       AND description = ? 
       AND bank_name = ? 
       AND owner_name = ?
@@ -449,8 +450,28 @@ async function syncTransactions(transactions, accountId, accountInfo = {}) {
       const txDate = tx.date || new Date().toISOString();
       const txDescription = tx.description || 'Sem descrição';
       
+      // Normalizar data para comparação (remover horário, manter apenas data)
+      // A API pode retornar com ou sem horário, então normalizamos para comparar apenas a data
+      let normalizedDate = txDate;
+      try {
+        // Se a data tem horário (formato ISO), extrair apenas a parte da data
+        if (txDate.includes('T')) {
+          normalizedDate = txDate.split('T')[0] + 'T00:00:00';
+        } else if (txDate.includes(' ')) {
+          // Se for formato com espaço, pegar apenas a data
+          normalizedDate = txDate.split(' ')[0] + 'T00:00:00';
+        }
+      } catch (e) {
+        // Se der erro, usar a data original
+        normalizedDate = txDate;
+      }
+      
+      // Normalizar valor para comparação (arredondar para 2 casas decimais)
+      const normalizedAmount = Math.round(amount * 100) / 100;
+      
       // Verificar duplicata antes de inserir (mesma data, valor, descrição, banco e pessoa)
-      const duplicate = checkDuplicate.get(txDate, amount, txDescription, bankName, ownerName);
+      // Usar data normalizada e valor normalizado para comparação mais robusta
+      const duplicate = checkDuplicate.get(normalizedDate, normalizedAmount, txDescription, bankName, ownerName);
       
       if (duplicate) {
         // Transação já existe, pular
