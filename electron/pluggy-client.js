@@ -295,16 +295,72 @@ export class PluggyClient {
   }
 
   async fetchTransactions(accountId, options = {}) {
-    const params = new URLSearchParams({
-      accountId,
-      ...Object.fromEntries(
-        Object.entries(options).map(([key, value]) => [key, String(value)])
-      ),
-    });
+    let allTransactions = [];
+    let page = 1;
+    let hasMore = true;
+    const pageSize = options.pageSize || 500; // Tamanho máximo de página da API Pluggy
     
-    const response = await this.request(`/transactions?${params.toString()}`);
-    // A API pode retornar { results: [...] } ou array direto
-    return response.results || response.data || response;
+    console.log(`[PluggyClient] Iniciando busca de transações para accountId: ${accountId}`);
+    
+    while (hasMore) {
+      const params = new URLSearchParams({
+        accountId,
+        page: String(page),
+        pageSize: String(pageSize),
+        ...Object.fromEntries(
+          Object.entries(options)
+            .filter(([key]) => key !== 'pageSize') // Remover pageSize das opções para não duplicar
+            .map(([key, value]) => [key, String(value)])
+        ),
+      });
+      
+      console.log(`[PluggyClient] Buscando página ${page}...`);
+      const response = await this.request(`/transactions?${params.toString()}`);
+      
+      // A API Pluggy retorna { results: [...], page: X, totalPages: Y, total: Z }
+      let transactions = [];
+      let currentPage = page;
+      let totalPages = 1;
+      
+      if (Array.isArray(response)) {
+        // Se for array direto (raro, mas possível)
+        transactions = response;
+        hasMore = transactions.length === pageSize;
+      } else if (response && typeof response === 'object') {
+        // Se for objeto com results
+        transactions = response.results || response.data || [];
+        currentPage = response.page || page;
+        totalPages = response.totalPages || 1;
+        
+        // Verificar se há mais páginas
+        hasMore = currentPage < totalPages && transactions.length > 0;
+        
+        console.log(`[PluggyClient] Página ${currentPage}/${totalPages}: ${transactions.length} transações`);
+      } else {
+        hasMore = false;
+      }
+      
+      if (transactions.length > 0) {
+        allTransactions = allTransactions.concat(transactions);
+        console.log(`[PluggyClient] Total acumulado: ${allTransactions.length} transações`);
+      }
+      
+      page++;
+      
+      // Limite de segurança para evitar loop infinito
+      if (page > 100) {
+        console.warn('[PluggyClient] Limite de páginas atingido (100)');
+        break;
+      }
+      
+      // Se não há mais transações, parar
+      if (transactions.length === 0) {
+        hasMore = false;
+      }
+    }
+    
+    console.log(`[PluggyClient] ✅ Total de transações buscadas: ${allTransactions.length} (${page - 1} páginas)`);
+    return allTransactions;
   }
 
   // Buscar faturas de cartão de crédito
