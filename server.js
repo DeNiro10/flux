@@ -1199,17 +1199,39 @@ function getDashboardData(filters = {}) {
             continue; // Ignorar
           }
           
-          // Verificar se corresponde à fatura anterior
+          // Verificar se corresponde à fatura anterior (pagamento único)
           if (prevBillAmount > 0) {
             const minAmount = prevBillAmount - tolerance;
             const maxAmount = prevBillAmount + tolerance;
+            
+            // Verificar pagamento único
             if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
               continue; // Ignorar - corresponde à fatura anterior
             }
+            
+            // Verificar se múltiplos pagamentos somam o valor da fatura anterior
+            runningSum += creditoAmount;
+            if (runningSum >= minAmount && runningSum <= maxAmount) {
+              // Se a soma atual corresponde à fatura, ignorar este e os anteriores
+              creditosToCount = 0; // Resetar contagem
+              runningSum = 0;
+              continue;
+            } else if (runningSum > maxAmount) {
+              // Se ultrapassou, resetar e contar apenas o excedente
+              const excess = runningSum - maxAmount;
+              creditosToCount = excess;
+              runningSum = excess;
+            }
+            // Se ainda não chegou no valor da fatura, NÃO contar ainda (pode ser parte do pagamento)
+          } else {
+            // Se não há fatura anterior, contar normalmente
+            creditosToCount += credito.amount;
           }
-          
-          // Se passou por todas as verificações, contar
-          creditosToCount += credito.amount;
+        }
+        
+        // Se ainda há runningSum acumulado mas não correspondeu à fatura, adicionar
+        if (prevBillAmount > 0 && runningSum > 0 && runningSum < (prevBillAmount - tolerance)) {
+          creditosToCount += runningSum;
         }
         
         totalCreditos += creditosToCount;
@@ -1354,10 +1376,9 @@ function getDashboardData(filters = {}) {
               const excess = runningSum - maxAmount;
               creditosToCount = excess;
               runningSum = excess;
-            } else {
-              // Ainda não chegou no valor da fatura, continuar acumulando
-              creditosToCount += credito.amount;
             }
+            // Se ainda não chegou no valor da fatura, NÃO contar ainda (pode ser parte do pagamento)
+            // Só contar quando passar do limite ou quando não houver mais créditos para verificar
           } else {
             // Se não há fatura anterior, contar normalmente
             creditosToCount += credito.amount;
