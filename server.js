@@ -268,7 +268,7 @@ const CATEGORY_RULES = {
   
   // FARMÁCIA
   farmacia: {
-    keywords: ['farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'drogasil', 'pague menos', 'ultrafarma', 'panvel', 'drogaria', 'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao', 'farmácia e drogaria', 'farmacia e drogaria', 'droga raia raia', 'raia drogas', 'drogasil drogasil', 'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo', 'farmácia nossa senhora', 'farmacia nossa senhora', 'farmácia nossa', 'farmacia nossa', 'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central', 'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas']
+    keywords: ['farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'drogasil', 'droga', 'drogas', 'pague menos', 'ultrafarma', 'panvel', 'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao', 'farmácia e drogaria', 'farmacia e drogaria', 'droga raia raia', 'raia drogas', 'drogasil drogasil', 'raia drogasil', 'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo', 'farmácia nossa senhora', 'farmacia nossa senhora', 'farmácia nossa', 'farmacia nossa', 'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central', 'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas']
   },
   
   // SAÚDE
@@ -298,7 +298,7 @@ const CATEGORY_RULES = {
   
   // EDUCAÇÃO
   educacao: {
-    keywords: ['escola', 'faculdade', 'universidade', 'curso', 'udemy', 'alura', 'coursera', 'duolingo', 'livro', 'apostila', 'material escolar', 'mensalidade', 'matrícula', 'matricula', 'cultura inglesa', 'ingles', 'inglês', 'idioma', 'wizard', 'fisk', 'ccaa', 'wise up']
+    keywords: ['escola', 'faculdade', 'universidade', 'curso', 'udemy', 'alura', 'coursera', 'duolingo', 'livro', 'apostila', 'material escolar', 'mensalidade', 'matrícula', 'matricula', 'cultura inglesa', 'ingles', 'inglês', 'idioma', 'wizard', 'fisk', 'ccaa', 'wise up', 'izabella mazzo', 'izabella', 'mazzo', 'moises', 'moisés', 'fiap']
   },
   
   // SERVIÇOS
@@ -336,8 +336,16 @@ function categorize(description, amount = 0, date = null) {
   
   // 0.1. Verificação especial: Farmácias devem ir para Farmácia (ANTES de verificar Moradia)
   // Isso evita que "Raia Drogasil", "Droga Raia" sejam categorizadas como Moradia
-  const farmaciaKeywords = ['raia', 'drogasil', 'droga raia', 'drogaria', 'farmácia', 'farmacia', 'pague menos', 'ultrafarma', 'panvel'];
-  if (farmaciaKeywords.some(keyword => descriptionLower.includes(keyword))) {
+  // Verificar palavras-chave de farmácia de forma mais abrangente
+  const farmaciaKeywords = [
+    'raia', 'drogasil', 'droga raia', 'drogaria', 'farmácia', 'farmacia', 
+    'pague menos', 'ultrafarma', 'panvel', 'droga', 'drogas', 'raia drogasil',
+    'raia drogas', 'droga raia raia', 'drogasil drogasil', 'farmácia popular',
+    'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao',
+    'farmácia e drogaria', 'farmacia e drogaria'
+  ];
+  // Verificar se a descrição contém qualquer palavra-chave de farmácia
+  if (farmaciaKeywords.some(keyword => descriptionLower.includes(keyword.toLowerCase()))) {
     return 'Farmácia';
   }
   
@@ -1053,25 +1061,127 @@ function getDashboardData(filters = {}) {
     const initialBalance = endOfPeriodBalance - periodMovement;
 
     // Fatura do cartão de crédito do período atual
+    // IMPORTANTE: Excluir pagamentos de fatura anterior (entradas positivas que correspondem a faturas fechadas)
     let creditCardBill = 0;
     if (period && period !== 'all') {
       const [year, month] = period.split('-').map(Number);
       const cycle = getCyclePeriod(year, month);
-      const creditBillResult = database.prepare(`
-        SELECT SUM(amount) as total FROM transactions 
+      
+      // Calcular gastos (valores negativos)
+      const gastosResult = database.prepare(`
+        SELECT SUM(ABS(amount)) as total FROM transactions 
         WHERE account_type = 'CREDIT' AND amount < 0 AND date >= ? AND date <= ?
       `).get(cycle.start, cycle.end);
-      creditCardBill = Math.abs(creditBillResult?.total || 0);
+      const gastos = gastosResult?.total || 0;
+      
+      // Calcular créditos (valores positivos), EXCLUINDO pagamentos de fatura anterior
+      // Buscar faturas fechadas anteriores para comparar valores
+      const previousBills = database.prepare(`
+        SELECT DISTINCT 
+          bank_name, 
+          owner_name,
+          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) - 
+          SUM(CASE WHEN amount > 0 AND description NOT LIKE '%Pagamento recebido%' THEN amount ELSE 0 END) as bill_amount
+        FROM transactions
+        WHERE account_type = 'CREDIT'
+          AND date < ?
+          AND category = 'Fatura'
+        GROUP BY bank_name, owner_name
+        HAVING bill_amount > 0
+      `).all(cycle.start);
+      
+      // Calcular créditos excluindo pagamentos que correspondem a faturas anteriores
+      let creditosQuery = `
+        SELECT SUM(amount) as total FROM transactions 
+        WHERE account_type = 'CREDIT' 
+          AND amount > 0 
+          AND date >= ? 
+          AND date <= ?
+          AND description NOT LIKE '%Pagamento recebido%'
+      `;
+      let creditosParams = [cycle.start, cycle.end];
+      
+      // Excluir pagamentos que correspondem a faturas anteriores (tolerância de 0.01)
+      const tolerance = 0.01;
+      if (previousBills.length > 0) {
+        const excludeConditions = [];
+        for (const bill of previousBills) {
+          const billAmount = bill.bill_amount || 0;
+          if (billAmount > 0) {
+            const minAmount = billAmount - tolerance;
+            const maxAmount = billAmount + tolerance;
+            excludeConditions.push(`NOT (bank_name = ? AND owner_name = ? AND ABS(amount) >= ? AND ABS(amount) <= ?)`);
+            creditosParams.push(bill.bank_name, bill.owner_name, minAmount, maxAmount);
+          }
+        }
+        if (excludeConditions.length > 0) {
+          creditosQuery += ` AND ${excludeConditions.join(' AND ')}`;
+        }
+      }
+      
+      const creditosResult = database.prepare(creditosQuery).get(...creditosParams);
+      const creditos = creditosResult?.total || 0;
+      
+      // Fatura = Gastos - Créditos (excluindo pagamentos de fatura anterior)
+      creditCardBill = gastos - creditos;
     } else {
       // Período atual
       const now = new Date();
       const currentMonth = now.getMonth() + 1;
       const currentCycle = getCyclePeriod(now.getFullYear(), currentMonth);
-      const creditBillResult = database.prepare(`
-        SELECT SUM(amount) as total FROM transactions 
+      
+      // Mesma lógica para período atual
+      const gastosResult = database.prepare(`
+        SELECT SUM(ABS(amount)) as total FROM transactions 
         WHERE account_type = 'CREDIT' AND amount < 0 AND date >= ? AND date <= ?
       `).get(currentCycle.start, currentCycle.end);
-      creditCardBill = Math.abs(creditBillResult?.total || 0);
+      const gastos = gastosResult?.total || 0;
+      
+      const previousBills = database.prepare(`
+        SELECT DISTINCT 
+          bank_name, 
+          owner_name,
+          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) - 
+          SUM(CASE WHEN amount > 0 AND description NOT LIKE '%Pagamento recebido%' THEN amount ELSE 0 END) as bill_amount
+        FROM transactions
+        WHERE account_type = 'CREDIT'
+          AND date < ?
+          AND category = 'Fatura'
+        GROUP BY bank_name, owner_name
+        HAVING bill_amount > 0
+      `).all(currentCycle.start);
+      
+      let creditosQuery = `
+        SELECT SUM(amount) as total FROM transactions 
+        WHERE account_type = 'CREDIT' 
+          AND amount > 0 
+          AND date >= ? 
+          AND date <= ?
+          AND description NOT LIKE '%Pagamento recebido%'
+      `;
+      let creditosParams = [currentCycle.start, currentCycle.end];
+      
+      const tolerance = 0.01;
+      if (previousBills.length > 0) {
+        const excludeConditions = [];
+        for (const bill of previousBills) {
+          const billAmount = bill.bill_amount || 0;
+          if (billAmount > 0) {
+            const minAmount = billAmount - tolerance;
+            const maxAmount = billAmount + tolerance;
+            excludeConditions.push(`NOT (bank_name = ? AND owner_name = ? AND ABS(amount) >= ? AND ABS(amount) <= ?)`);
+            creditosParams.push(bill.bank_name, bill.owner_name, minAmount, maxAmount);
+          }
+        }
+        if (excludeConditions.length > 0) {
+          creditosQuery += ` AND ${excludeConditions.join(' AND ')}`;
+        }
+      }
+      
+      const creditosResult = database.prepare(creditosQuery).get(...creditosParams);
+      const creditos = creditosResult?.total || 0;
+      
+      creditCardBill = gastos - creditos;
     }
 
     return {
@@ -2175,25 +2285,31 @@ app.post('/api/transactions/fix-localiza', (req, res) => {
   }
 });
 
-// Endpoint para atualizar transações de farmácia de Moradia/Saúde para Farmácia
+// Endpoint para atualizar transações de farmácia de qualquer categoria incorreta para Farmácia
 app.post('/api/transactions/fix-farmacia', (req, res) => {
   try {
     const database = getDB();
     
-    // Buscar transações que contêm keywords de farmácia e estão como "Moradia" ou "Saúde"
+    // Buscar transações que contêm keywords de farmácia e NÃO estão como "Farmácia"
+    // Incluir todas as variações possíveis: raia, drogasil, droga, drogaria, etc.
     const transactions = database.prepare(`
       SELECT id, description, category 
       FROM transactions 
-      WHERE category IN ('Moradia', 'Saúde')
-      AND (LOWER(description) LIKE '%drogasil%' 
-           OR LOWER(description) LIKE '%droga raia%' 
-           OR LOWER(description) LIKE '%farmácia%' 
-           OR LOWER(description) LIKE '%farmacia%' 
-           OR LOWER(description) LIKE '%drogaria%' 
-           OR LOWER(description) LIKE '%raia%' 
-           OR LOWER(description) LIKE '%pague menos%' 
-           OR LOWER(description) LIKE '%ultrafarma%' 
-           OR LOWER(description) LIKE '%panvel%')
+      WHERE category != 'Farmácia'
+      AND (
+        LOWER(description) LIKE '%drogasil%' 
+        OR LOWER(description) LIKE '%droga raia%' 
+        OR LOWER(description) LIKE '%raia drogasil%'
+        OR LOWER(description) LIKE '%raia drogas%'
+        OR LOWER(description) LIKE '%farmácia%' 
+        OR LOWER(description) LIKE '%farmacia%' 
+        OR LOWER(description) LIKE '%drogaria%' 
+        OR (LOWER(description) LIKE '%raia%' AND LOWER(description) NOT LIKE '%praia%')
+        OR LOWER(description) LIKE '%pague menos%' 
+        OR LOWER(description) LIKE '%ultrafarma%' 
+        OR LOWER(description) LIKE '%panvel%'
+        OR (LOWER(description) LIKE '%droga%' AND LOWER(description) NOT LIKE '%combustivel%' AND LOWER(description) NOT LIKE '%combustível%')
+      )
     `).all();
     
     let updated = 0;
