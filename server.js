@@ -330,7 +330,7 @@ function categorize(description, amount = 0, date = null) {
   
   // 0. Verificação especial: Mercado Livre e variações devem ir para Compras (antes de verificar Mercado)
   const mercadoLivreVariations = ['mercado livre', 'mercadolivre', 'mercadol'];
-  if (mercadolivreVariations.some(variation => descriptionLower.includes(variation))) {
+  if (mercadoLivreVariations.some(variation => descriptionLower.includes(variation))) {
     return 'Compras';
   }
   
