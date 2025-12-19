@@ -1379,11 +1379,15 @@ function getDashboardData(filters = {}) {
               runningSum = excess;
             }
             // Se ainda não chegou no valor da fatura, NÃO contar ainda (pode ser parte do pagamento)
-            // Só contar quando passar do limite ou quando não houver mais créditos para verificar
           } else {
             // Se não há fatura anterior, contar normalmente
             creditosToCount += credito.amount;
           }
+        }
+        
+        // Se ainda há runningSum acumulado mas não correspondeu à fatura, adicionar
+        if (prevBillAmount > 0 && runningSum > 0 && runningSum < (prevBillAmount - tolerance)) {
+          creditosToCount += runningSum;
         }
         
         totalCreditos += creditosToCount;
