@@ -2173,11 +2173,11 @@ app.post('/api/transactions/fix-farmacia', (req, res) => {
   try {
     const database = getDB();
     
-    // Buscar transações que contêm keywords de farmácia e estão como "Saúde"
+    // Buscar transações que contêm keywords de farmácia e estão como "Moradia" ou "Saúde"
     const transactions = database.prepare(`
       SELECT id, description, category 
       FROM transactions 
-      WHERE category = 'Saúde'
+      WHERE category IN ('Moradia', 'Saúde')
       AND (LOWER(description) LIKE '%drogasil%' 
            OR LOWER(description) LIKE '%droga raia%' 
            OR LOWER(description) LIKE '%farmácia%' 
