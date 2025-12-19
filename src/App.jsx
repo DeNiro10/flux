@@ -601,6 +601,113 @@ function App() {
     }
   };
 
+  // Gastos Previstos
+  const [expectedExpensesData, setExpectedExpensesData] = useState({
+    expenses: [],
+    loading: false,
+    error: null,
+  });
+
+  const [showExpectedExpenseModal, setShowExpectedExpenseModal] = useState(false);
+  const [editingExpectedExpense, setEditingExpectedExpense] = useState(null);
+  const [expectedExpenseForm, setExpectedExpenseForm] = useState({
+    name: '',
+    amount: '',
+    endDate: '',
+    paymentMethod: 'Pix',
+  });
+
+  const loadExpectedExpenses = async () => {
+    try {
+      setExpectedExpensesData(prev => ({ ...prev, loading: true, error: null }));
+      const periodParam = filters.period && filters.period !== 'all' ? `?period=${filters.period}` : '';
+      const data = await api.getExpectedExpenses(periodParam);
+      setExpectedExpensesData({
+        expenses: data.expenses || [],
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      console.error('Erro ao buscar gastos previstos:', err);
+      setExpectedExpensesData(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'expected-expenses') {
+      loadExpectedExpenses();
+    }
+  }, [activeTab, filters.period]);
+
+  const handleOpenExpectedExpenseModal = (expense = null) => {
+    if (expense) {
+      setEditingExpectedExpense(expense);
+      setExpectedExpenseForm({
+        name: expense.name || '',
+        amount: expense.amount.toString(),
+        endDate: expense.endDate || '',
+        paymentMethod: expense.paymentMethod || 'Pix',
+      });
+    } else {
+      setEditingExpectedExpense(null);
+      setExpectedExpenseForm({
+        name: '',
+        amount: '',
+        endDate: '',
+        paymentMethod: 'Pix',
+      });
+    }
+    setShowExpectedExpenseModal(true);
+  };
+
+  const handleCloseExpectedExpenseModal = () => {
+    setShowExpectedExpenseModal(false);
+    setEditingExpectedExpense(null);
+    setExpectedExpenseForm({
+      name: '',
+      amount: '',
+      endDate: '',
+      paymentMethod: 'Pix',
+    });
+  };
+
+  const handleSaveExpectedExpense = async () => {
+    try {
+      const expenseData = {
+        name: expectedExpenseForm.name,
+        amount: parseFloat(expectedExpenseForm.amount),
+        endDate: expectedExpenseForm.endDate || null,
+        paymentMethod: expectedExpenseForm.paymentMethod,
+      };
+
+      if (editingExpectedExpense) {
+        await api.updateExpectedExpense(editingExpectedExpense.id, expenseData);
+      } else {
+        await api.createExpectedExpense(expenseData);
+      }
+
+      handleCloseExpectedExpenseModal();
+      await loadExpectedExpenses();
+    } catch (err) {
+      console.error('Erro ao salvar gasto previsto:', err);
+      alert('Erro ao salvar gasto previsto: ' + err.message);
+    }
+  };
+
+  const handleDeleteExpectedExpense = async (expenseId) => {
+    if (!confirm('Tem certeza que deseja deletar este gasto previsto?')) {
+      return;
+    }
+
+    try {
+      await api.deleteExpectedExpense(expenseId);
+      await loadExpectedExpenses();
+    } catch (err) {
+      console.error('Erro ao deletar gasto previsto:', err);
+      alert('Erro ao deletar gasto previsto: ' + err.message);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'loans') {
       loadLoans();
@@ -837,7 +944,7 @@ function App() {
 
         {/* Navigation Tabs */}
         <div className="px-8 flex gap-1">
-          {['overview', 'transactions', 'loans', 'goals', 'analytics'].map(tab => (
+          {['overview', 'transactions', 'loans', 'goals', 'expected-expenses', 'analytics'].map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -848,7 +955,7 @@ function App() {
                   : clsx(theme.textMuted, darkMode ? "hover:text-white" : "hover:text-black")
               )}
             >
-              {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : tab === 'goals' ? 'Metas' : 'Análises'}
+              {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : tab === 'goals' ? 'Metas' : tab === 'expected-expenses' ? 'Gastos Previstos' : 'Análises'}
               {activeTab === tab && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#00D4FF] to-[#7B61FF]"></div>
               )}
@@ -1611,6 +1718,167 @@ function App() {
           </div>
         )}
 
+        {/* Gastos Previstos Tab */}
+        {activeTab === 'expected-expenses' && (
+          <div className="space-y-6">
+            {expectedExpensesData.loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-10 h-10 border-2 border-[#00D4FF]/30 border-t-[#00D4FF] rounded-full animate-spin"></div>
+              </div>
+            ) : expectedExpensesData.error ? (
+              <div className={clsx("p-4 rounded-lg border", theme.card, theme.cardBorder)}>
+                <p className="text-[#FF4757]">Erro: {expectedExpensesData.error}</p>
+              </div>
+            ) : (
+              <>
+                {/* Header com botão de adicionar */}
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Gastos Previstos</h2>
+                  <button
+                    onClick={() => handleOpenExpectedExpenseModal()}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                      "flex items-center gap-2"
+                    )}
+                  >
+                    <span>+</span> Adicionar Gasto
+                  </button>
+                </div>
+
+                {/* Expenses List */}
+                {expectedExpensesData.expenses.length === 0 ? (
+                  <div className={clsx("rounded-2xl p-12 text-center border", theme.card, theme.cardBorder)}>
+                    <p className={clsx("text-lg", theme.textMuted)}>Nenhum gasto previsto encontrado</p>
+                    <button
+                      onClick={() => handleOpenExpectedExpenseModal()}
+                      className={clsx(
+                        "mt-4 px-4 py-2 rounded-lg font-medium transition-all",
+                        "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80"
+                      )}
+                    >
+                      Adicionar Primeiro Gasto
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {expectedExpensesData.expenses.map((expense) => (
+                      <div key={expense.id} className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.02] transition-transform duration-200")}>
+                        {/* Background gradient effect */}
+                        <div className={clsx(
+                          "absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-10 -z-0",
+                          expense.isPaid ? "bg-[#00FF94]" : expense.isActive ? "bg-[#FFB800]" : "bg-[#64748b]"
+                        )}></div>
+
+                        {/* Header */}
+                        <div className="relative z-10 flex items-start justify-between mb-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-3">
+                              {expense.isPaid ? (
+                                <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/40 flex items-center gap-1.5">
+                                  <span>✓</span> PAGO
+                                </span>
+                              ) : expense.isActive ? (
+                                <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-[#FFB800]/20 text-[#FFB800] border border-[#FFB800]/40 flex items-center gap-1.5">
+                                  <span>⏳</span> PENDENTE
+                                </span>
+                              ) : (
+                                <span className={clsx("px-3 py-1.5 rounded-full text-xs font-medium", darkMode ? "bg-white/5 text-white/70" : "bg-black/5 text-black/70")}>
+                                  Encerrado
+                                </span>
+                              )}
+                            </div>
+                            <h3 className={clsx("text-xl font-bold mb-1", theme.text)}>{expense.name}</h3>
+                            <p className={clsx("text-xs font-medium", theme.textMuted)}>
+                              {expense.paymentMethod}
+                            </p>
+                          </div>
+                          <div className="flex gap-1.5">
+                            <button
+                              onClick={() => handleOpenExpectedExpenseModal(expense)}
+                              className={clsx(
+                                "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                "bg-[#7B61FF]/20 text-[#7B61FF] hover:bg-[#7B61FF]/30 border border-[#7B61FF]/30"
+                              )}
+                              title="Editar"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              onClick={() => handleDeleteExpectedExpense(expense.id)}
+                              className={clsx(
+                                "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30 border border-[#FF4757]/30"
+                              )}
+                              title="Deletar"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Amount Display */}
+                        <div className="mb-4 relative z-10">
+                          <div className="flex items-baseline gap-2 mb-1">
+                            <span className={clsx("text-2xl font-bold", expense.isPaid ? "text-[#00FF94]" : "text-[#FFB800]", theme.text)}>
+                              {formatCurrency(expense.amount)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className={clsx("text-xs font-medium", theme.textMuted)}>
+                              Data de encerramento: {expense.endDateLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Payment Info */}
+                        {expense.isPaid && expense.lastPaymentDate && (
+                          <div className="mb-4 pt-4 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
+                            <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Último pagamento</p>
+                            <p className={clsx("text-sm font-semibold", theme.text)}>
+                              {formatDate(expense.lastPaymentDate)} - {formatCurrency(expense.lastPaymentAmount)}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Matching Transactions */}
+                        {expense.matchingTransactions && expense.matchingTransactions.length > 0 && (
+                          <details className="relative z-10 mt-4">
+                            <summary className={clsx(
+                              "cursor-pointer text-xs font-medium py-2 px-3 rounded-lg transition-all",
+                              darkMode ? "bg-white/5 hover:bg-white/10" : "bg-black/5 hover:bg-black/10",
+                              theme.textMuted
+                            )}>
+                              <span>Transações Encontradas ({expense.matchingTransactions.length})</span>
+                              <span className="text-xs ml-2">▼</span>
+                            </summary>
+                            <div className="mt-2 space-y-2 max-h-48 overflow-y-auto">
+                              {expense.matchingTransactions.map((tx) => (
+                                <div key={tx.id} className={clsx("p-2 rounded text-xs", darkMode ? "bg-white/5" : "bg-black/5")}>
+                                  <div className="flex justify-between items-start mb-1">
+                                    <span className={clsx("font-medium", theme.text)}>{formatDate(tx.date)}</span>
+                                    <span className={clsx("font-semibold", theme.text)}>{formatCurrency(Math.abs(tx.amount))}</span>
+                                  </div>
+                                  <p className={clsx("text-xs", theme.textMuted)}>{tx.description}</p>
+                                  <div className="flex gap-2 mt-1">
+                                    <span className={clsx("text-xs", theme.textMuted)}>{tx.category}</span>
+                                    {tx.bankName && <span className={clsx("text-xs", theme.textMuted)}>• {tx.bankName}</span>}
+                                    {tx.ownerName && <span className={clsx("text-xs", theme.textMuted)}>• {tx.ownerName}</span>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* Analytics Tab */}
         {dashboardData && activeTab === 'analytics' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2051,6 +2319,99 @@ function App() {
                   )}
                 >
                   Adicionar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Expected Expense Modal */}
+      {showExpectedExpenseModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+          <div className={clsx("relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                {editingExpectedExpense ? 'Editar Gasto Previsto' : 'Adicionar Gasto Previsto'}
+              </h2>
+              <button 
+                onClick={handleCloseExpectedExpenseModal}
+                className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Gasto *</label>
+                <input
+                  type="text"
+                  value={expectedExpenseForm.name}
+                  onChange={(e) => setExpectedExpenseForm({ ...expectedExpenseForm, name: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="Ex: Aluguel"
+                />
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={expectedExpenseForm.amount}
+                  onChange={(e) => setExpectedExpenseForm({ ...expectedExpenseForm, amount: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Data de Encerramento</label>
+                <input
+                  type="date"
+                  value={expectedExpenseForm.endDate}
+                  onChange={(e) => setExpectedExpenseForm({ ...expectedExpenseForm, endDate: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                />
+                <p className={clsx("text-xs mt-1", theme.textMuted)}>Deixe em branco para "Indeterminado"</p>
+              </div>
+
+              <div>
+                <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Forma de Pagamento *</label>
+                <select
+                  value={expectedExpenseForm.paymentMethod}
+                  onChange={(e) => setExpectedExpenseForm({ ...expectedExpenseForm, paymentMethod: e.target.value })}
+                  className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                >
+                  <option value="Pix">Pix</option>
+                  <option value="Débito Automático">Débito Automático</option>
+                  <option value="Boleto">Boleto</option>
+                  <option value="Transferência">Transferência</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Outro">Outro</option>
+                </select>
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={handleCloseExpectedExpenseModal}
+                  className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveExpectedExpense}
+                  disabled={!expectedExpenseForm.name || !expectedExpenseForm.amount || !expectedExpenseForm.paymentMethod}
+                  className={clsx(
+                    "px-4 py-2 rounded-lg font-medium transition-all",
+                    "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  {editingExpectedExpense ? 'Salvar Alterações' : 'Adicionar'}
                 </button>
               </div>
             </div>

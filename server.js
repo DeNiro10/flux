@@ -128,6 +128,16 @@ function getDB() {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS expected_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        end_date TEXT,
+        payment_method TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
       CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
       CREATE INDEX IF NOT EXISTS idx_transactions_provider_id ON transactions(provider_id);
@@ -3793,15 +3803,223 @@ app.delete('/api/goals/:id', (req, res) => {
   }
 });
 
+// ========== GASTOS PREVISTOS ==========
+app.get('/api/expected-expenses', async (req, res) => {
+  try {
+    const database = getDB();
+    const { period } = req.query; // Formato: "2025-01" ou "all"
+    
+    // Determinar período atual se não especificado
+    let targetYear, targetMonth;
+    if (period && period !== 'all') {
+      const [year, month] = period.split('-').map(Number);
+      targetYear = year;
+      targetMonth = month;
+    } else {
+      const now = new Date();
+      targetYear = now.getFullYear();
+      targetMonth = now.getMonth() + 1;
+    }
+
+    const expenses = database.prepare(`
+      SELECT 
+        id,
+        name,
+        amount,
+        end_date,
+        payment_method,
+        created_at,
+        updated_at
+      FROM expected_expenses
+      ORDER BY name ASC, created_at DESC
+    `).all();
+
+    // Para cada gasto previsto, verificar se foi pago no período atual
+    const expensesWithStatus = expenses.map(expense => {
+      // Verificar se tem data de encerramento e se já passou
+      let isActive = true;
+      if (expense.end_date) {
+        const endDate = new Date(expense.end_date);
+        const now = new Date();
+        isActive = endDate >= now;
+      }
+
+      // Buscar transações que correspondam a este gasto no mês atual
+      // Matching: nome similar na descrição E valor similar (tolerância de 5%)
+      const matchingTransactions = database.prepare(`
+        SELECT 
+          id,
+          date,
+          amount,
+          description,
+          category,
+          bank_name,
+          owner_name
+        FROM transactions
+        WHERE 
+          amount < 0
+          AND date >= date('${targetYear}-${String(targetMonth).padStart(2, '0')}-01')
+          AND date < date('${targetYear}-${String(targetMonth).padStart(2, '0')}-01', '+1 month')
+          AND (
+            LOWER(description) LIKE '%' || LOWER(?) || '%'
+            OR LOWER(description) LIKE '%' || LOWER(?) || '%'
+          )
+          AND ABS(amount) >= ? * 0.95
+          AND ABS(amount) <= ? * 1.05
+        ORDER BY date DESC
+        LIMIT 10
+      `).all(
+        expense.name,
+        expense.name.split(' ')[0], // Primeira palavra do nome
+        Math.abs(expense.amount),
+        Math.abs(expense.amount)
+      );
+
+      // Considerar pago se encontrou pelo menos uma transação correspondente
+      const isPaid = matchingTransactions.length > 0;
+      const lastPaymentDate = matchingTransactions.length > 0 
+        ? matchingTransactions[0].date 
+        : null;
+      const lastPaymentAmount = matchingTransactions.length > 0 
+        ? Math.abs(matchingTransactions[0].amount)
+        : null;
+
+      return {
+        id: expense.id,
+        name: expense.name,
+        amount: expense.amount,
+        endDate: expense.end_date,
+        endDateLabel: expense.end_date 
+          ? new Date(expense.end_date).toLocaleDateString('pt-BR')
+          : 'Indeterminado',
+        paymentMethod: expense.payment_method,
+        isActive,
+        isPaid,
+        lastPaymentDate,
+        lastPaymentAmount,
+        matchingTransactions: matchingTransactions.map(tx => ({
+          id: tx.id,
+          date: tx.date,
+          amount: tx.amount,
+          description: tx.description,
+          category: tx.category,
+          bankName: tx.bank_name,
+          ownerName: tx.owner_name
+        })),
+        createdAt: expense.created_at,
+        updatedAt: expense.updated_at
+      };
+    });
+
+    res.json({ expenses: expensesWithStatus });
+  } catch (error) {
+    console.error('[EXPECTED_EXPENSES] Erro:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/expected-expenses', (req, res) => {
+  try {
+    const database = getDB();
+    const { name, amount, endDate, paymentMethod } = req.body;
+
+    if (!name || !amount || !paymentMethod) {
+      return res.status(400).json({ error: 'Nome, valor e forma de pagamento são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      INSERT INTO expected_expenses (name, amount, end_date, payment_method, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      name,
+      amount,
+      endDate || null, // Pode ser null para "Indeterminado"
+      paymentMethod
+    );
+
+    res.json({ 
+      success: true, 
+      id: result.lastInsertRowid,
+      message: 'Gasto previsto criado com sucesso'
+    });
+  } catch (error) {
+    console.error('[EXPECTED_EXPENSES] Erro ao criar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/expected-expenses/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { name, amount, endDate, paymentMethod } = req.body;
+
+    if (!name || !amount || !paymentMethod) {
+      return res.status(400).json({ error: 'Nome, valor e forma de pagamento são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      UPDATE expected_expenses 
+      SET name = ?,
+          amount = ?,
+          end_date = ?,
+          payment_method = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name,
+      amount,
+      endDate || null,
+      paymentMethod,
+      id
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Gasto previsto não encontrado' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Gasto previsto atualizado com sucesso'
+    });
+  } catch (error) {
+    console.error('[EXPECTED_EXPENSES] Erro ao atualizar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/expected-expenses/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+
+    const result = database.prepare('DELETE FROM expected_expenses WHERE id = ?').run(id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Gasto previsto não encontrado' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Gasto previsto deletado com sucesso'
+    });
+  } catch (error) {
+    console.error('[EXPECTED_EXPENSES] Erro ao deletar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Registrar todas as rotas antes de iniciar o servidor
 console.log('📋 Rotas registradas:');
 console.log('  GET  /api/pluggy/connectors');
 console.log('  GET  /api/pluggy/items');
 console.log('  GET  /api/pluggy/real-balances');
 console.log('  GET  /api/loans');
+console.log('  GET  /api/expected-expenses');
 console.log('  POST /api/pluggy/token');
 console.log('  POST /api/pluggy/sync');
 console.log('  POST /api/pluggy/create-item');
+console.log('  POST /api/expected-expenses');
 console.log('  GET  /api/pluggy/item/:itemId');
 console.log('  POST /api/pluggy/item/:itemId/mfa');
 

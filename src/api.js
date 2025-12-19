@@ -451,5 +451,53 @@ export const api = {
     }
     return response.json();
   },
+
+  // Gastos Previstos
+  getExpectedExpenses: async (period = '') => {
+    const url = period ? `${API_BASE}/expected-expenses?period=${period}` : `${API_BASE}/expected-expenses`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar gastos previstos');
+    }
+    return response.json();
+  },
+
+  createExpectedExpense: async (expense) => {
+    const response = await fetch(`${API_BASE}/expected-expenses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(expense),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar gasto previsto');
+    }
+    return response.json();
+  },
+
+  updateExpectedExpense: async (id, expense) => {
+    const response = await fetch(`${API_BASE}/expected-expenses/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(expense),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar gasto previsto');
+    }
+    return response.json();
+  },
+
+  deleteExpectedExpense: async (id) => {
+    const response = await fetch(`${API_BASE}/expected-expenses/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar gasto previsto');
+    }
+    return response.json();
+  },
 };
 
