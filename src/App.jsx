@@ -40,8 +40,10 @@ function App() {
     try {
       const savedTab = sessionStorage.getItem('activeTab');
       const savedFilters = sessionStorage.getItem('filters');
+      // Migrar 'goals' antigo para 'limits'
+      const tab = savedTab === 'goals' ? 'limits' : (savedTab || 'overview');
       return {
-        tab: savedTab || 'overview',
+        tab: tab,
         filters: savedFilters ? JSON.parse(savedFilters) : null
       };
     } catch (e) {
@@ -195,6 +197,41 @@ function App() {
     periodMonth: new Date().getMonth() + 1,
     periodYear: new Date().getFullYear()
   });
+
+  // Financial Goals (Novas Metas)
+  const [financialGoalsData, setFinancialGoalsData] = useState({
+    goals: [],
+    loading: false,
+    error: null,
+  });
+  const [showFinancialGoalModal, setShowFinancialGoalModal] = useState(false);
+  const [editingFinancialGoal, setEditingFinancialGoal] = useState(null);
+  const [financialGoalForm, setFinancialGoalForm] = useState({
+    name: '',
+    type: 'custom',
+    targetAmount: '',
+    currentAmount: '',
+    description: '',
+    targetDate: '',
+  });
+
+  // Due Dates (Calendário)
+  const [dueDatesData, setDueDatesData] = useState({
+    calendar: {},
+    all: [],
+    loading: false,
+    error: null,
+  });
+  const [showDueDateModal, setShowDueDateModal] = useState(false);
+  const [editingDueDate, setEditingDueDate] = useState(null);
+  const [dueDateForm, setDueDateForm] = useState({
+    name: '',
+    type: 'custom',
+    amount: '',
+    due_day: '',
+  });
+
+  const [expandedBalance, setExpandedBalance] = useState(false);
   const [loanForm, setLoanForm] = useState({
     description: '',
     type: 'Outro',
@@ -525,8 +562,14 @@ function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'goals') {
+    if (activeTab === 'limits') {
       loadGoals();
+    }
+    if (activeTab === 'goals') {
+      loadFinancialGoals();
+    }
+    if (activeTab === 'calendar') {
+      loadDueDates();
     }
   }, [activeTab, filters.period]);
 
@@ -588,13 +631,106 @@ function App() {
   };
 
   const handleDeleteGoal = async (goalId) => {
-    if (!confirm('Tem certeza que deseja deletar esta meta?')) {
+    if (!confirm('Tem certeza que deseja deletar este limite?')) {
       return;
     }
 
     try {
       await api.deleteGoal(goalId);
       await loadGoals();
+    } catch (err) {
+      console.error('Erro ao deletar limite:', err);
+      alert('Erro ao deletar limite: ' + err.message);
+    }
+  };
+
+  // Financial Goals Functions
+  const loadFinancialGoals = async () => {
+    try {
+      setFinancialGoalsData(prev => ({ ...prev, loading: true, error: null }));
+      const data = await api.getFinancialGoals();
+      setFinancialGoalsData({
+        goals: data.goals || [],
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      console.error('Erro ao buscar metas financeiras:', err);
+      setFinancialGoalsData(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
+
+  const handleOpenFinancialGoalModal = (goal = null) => {
+    if (goal) {
+      setEditingFinancialGoal(goal);
+      setFinancialGoalForm({
+        name: goal.name || '',
+        type: goal.type || 'custom',
+        targetAmount: goal.target_amount?.toString() || '',
+        currentAmount: goal.current_amount?.toString() || '',
+        description: goal.description || '',
+        targetDate: goal.target_date || '',
+      });
+    } else {
+      setEditingFinancialGoal(null);
+      setFinancialGoalForm({
+        name: '',
+        type: 'custom',
+        targetAmount: '',
+        currentAmount: '',
+        description: '',
+        targetDate: '',
+      });
+    }
+    setShowFinancialGoalModal(true);
+  };
+
+  const handleCloseFinancialGoalModal = () => {
+    setShowFinancialGoalModal(false);
+    setEditingFinancialGoal(null);
+    setFinancialGoalForm({
+      name: '',
+      type: 'custom',
+      targetAmount: '',
+      currentAmount: '',
+      description: '',
+      targetDate: '',
+    });
+  };
+
+  const handleSaveFinancialGoal = async () => {
+    try {
+      const goalData = {
+        name: financialGoalForm.name,
+        type: financialGoalForm.type,
+        targetAmount: parseFloat(financialGoalForm.targetAmount),
+        currentAmount: parseFloat(financialGoalForm.currentAmount) || 0,
+        description: financialGoalForm.description,
+        targetDate: financialGoalForm.targetDate || null,
+      };
+
+      if (editingFinancialGoal) {
+        await api.updateFinancialGoal(editingFinancialGoal.id, goalData);
+      } else {
+        await api.createFinancialGoal(goalData);
+      }
+
+      handleCloseFinancialGoalModal();
+      await loadFinancialGoals();
+    } catch (err) {
+      console.error('Erro ao salvar meta financeira:', err);
+      alert('Erro ao salvar meta: ' + err.message);
+    }
+  };
+
+  const handleDeleteFinancialGoal = async (goalId) => {
+    if (!confirm('Tem certeza que deseja deletar esta meta?')) {
+      return;
+    }
+
+    try {
+      await api.deleteFinancialGoal(goalId);
+      await loadFinancialGoals();
     } catch (err) {
       console.error('Erro ao deletar meta:', err);
       alert('Erro ao deletar meta: ' + err.message);
@@ -620,7 +756,8 @@ function App() {
   const loadExpectedExpenses = async () => {
     try {
       setExpectedExpensesData(prev => ({ ...prev, loading: true, error: null }));
-      const periodParam = filters.period && filters.period !== 'all' ? `?period=${filters.period}` : '';
+      // Passar apenas o valor do período, sem o "?"
+      const periodParam = filters.period && filters.period !== 'all' ? filters.period : '';
       const data = await api.getExpectedExpenses(periodParam);
       setExpectedExpensesData({
         expenses: data.expenses || [],
@@ -636,6 +773,10 @@ function App() {
   useEffect(() => {
     if (activeTab === 'expected-expenses') {
       loadExpectedExpenses();
+      // Inserir regras padrão na primeira vez (silenciosamente)
+      api.seedDefaultValidationRules().catch(() => {
+        // Ignorar erro se já existirem
+      });
     }
   }, [activeTab, filters.period]);
 
@@ -708,11 +849,99 @@ function App() {
     }
   };
 
+  const handleMarkAsPaid = async (expenseId, isPaid) => {
+    try {
+      // Passar o período atual para marcar como pago apenas neste período
+      const periodParam = filters.period && filters.period !== 'all' ? filters.period : '';
+      await api.markExpectedExpenseAsPaid(expenseId, !isPaid, periodParam);
+      await loadExpectedExpenses();
+    } catch (err) {
+      console.error('Erro ao marcar gasto como pago:', err);
+      alert('Erro ao marcar gasto: ' + err.message);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'loans') {
       loadLoans();
     }
   }, [activeTab]);
+
+  // Due Dates (Calendário)
+  const loadDueDates = async () => {
+    try {
+      setDueDatesData(prev => ({ ...prev, loading: true, error: null }));
+      const now = new Date();
+      const data = await api.getDueDates(now.getMonth() + 1, now.getFullYear());
+      setDueDatesData({
+        calendar: data.calendar || {},
+        all: data.all || [],
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      console.error('Erro ao buscar vencimentos:', err);
+      setDueDatesData(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  };
+
+  const handleOpenDueDateModal = (dueDate = null) => {
+    if (dueDate) {
+      setEditingDueDate(dueDate);
+      setDueDateForm({
+        name: dueDate.name || '',
+        type: dueDate.type || 'custom',
+        amount: dueDate.amount?.toString() || '',
+        due_day: dueDate.due_day?.toString() || '',
+      });
+    } else {
+      setEditingDueDate(null);
+      setDueDateForm({
+        name: '',
+        type: 'custom',
+        amount: '',
+        due_day: '',
+      });
+    }
+    setShowDueDateModal(true);
+  };
+
+  const handleSaveDueDate = async () => {
+    try {
+      const dueDateData = {
+        name: dueDateForm.name,
+        type: dueDateForm.type,
+        amount: dueDateForm.amount ? parseFloat(dueDateForm.amount) : null,
+        due_day: parseInt(dueDateForm.due_day),
+      };
+
+      if (editingDueDate) {
+        await api.updateDueDate(editingDueDate.id, dueDateData);
+      } else {
+        await api.createDueDate(dueDateData);
+      }
+
+      setShowDueDateModal(false);
+      setEditingDueDate(null);
+      await loadDueDates();
+    } catch (err) {
+      console.error('Erro ao salvar vencimento:', err);
+      alert('Erro ao salvar: ' + err.message);
+    }
+  };
+
+  const handleDeleteDueDate = async (id) => {
+    if (!confirm('Tem certeza que deseja deletar este vencimento?')) {
+      return;
+    }
+    try {
+      await api.deleteDueDate(id);
+      await loadDueDates();
+    } catch (err) {
+      console.error('Erro ao deletar vencimento:', err);
+      alert('Erro ao deletar: ' + err.message);
+    }
+  };
 
   const loadDashboard = async () => {
     try {
@@ -803,6 +1032,150 @@ function App() {
     return Object.values(dailyMap).sort((a, b) => a.day.localeCompare(b.day)).slice(-15);
   }, [dashboardData?.transactions]);
 
+  // Projeção de Entradas (baseado em salários/renda recorrente)
+  const incomeProjection = useMemo(() => {
+    if (!dashboardData?.transactions) return { monthlyAverage: 0, projection: [] };
+    
+    // Buscar todas as transações de entrada dos últimos 6 meses
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const minDate = sixMonthsAgo.toISOString();
+    
+    // Filtrar apenas transações que parecem ser salários/renda recorrente
+    // Palavras-chave comuns em salários
+    const salaryKeywords = [
+      'salario', 'salário', 'sal', 'folha', 'pagamento', 'pagto',
+      'remuneracao', 'remuneração', 'prolabore', 'ordenado',
+      'deposito', 'depósito', 'credito', 'crédito', 'transferencia', 'transferência'
+    ];
+    
+    const allIncomeTransactions = dashboardData.transactions.filter(tx => 
+      tx.amount > 0 && 
+      new Date(tx.date) >= sixMonthsAgo &&
+      (tx.account_type === 'BANK' || !tx.account_type)
+    );
+    
+    // Identificar salários: valores recorrentes similares ou descrições com palavras-chave
+    const salaryPatterns = {};
+    allIncomeTransactions.forEach(tx => {
+      const desc = tx.description.toLowerCase();
+      const isSalaryKeyword = salaryKeywords.some(keyword => desc.includes(keyword));
+      
+      // Se tem palavra-chave de salário, considerar
+      if (isSalaryKeyword) {
+        const amount = Math.round(tx.amount / 100) * 100; // Arredondar para centenas
+        if (!salaryPatterns[amount]) {
+          salaryPatterns[amount] = [];
+        }
+        salaryPatterns[amount].push(tx);
+      }
+    });
+    
+    // Encontrar o padrão mais comum (salário principal)
+    let mainSalaryPattern = null;
+    let maxCount = 0;
+    Object.keys(salaryPatterns).forEach(amount => {
+      if (salaryPatterns[amount].length > maxCount) {
+        maxCount = salaryPatterns[amount].length;
+        mainSalaryPattern = parseFloat(amount);
+      }
+    });
+    
+    // Se não encontrou padrão claro, usar valores recorrentes similares
+    if (!mainSalaryPattern || maxCount < 2) {
+      // Agrupar por valores similares (diferença de até 5%)
+      const valueGroups = {};
+      allIncomeTransactions.forEach(tx => {
+        const rounded = Math.round(tx.amount / 100) * 100;
+        if (!valueGroups[rounded]) {
+          valueGroups[rounded] = [];
+        }
+        valueGroups[rounded].push(tx);
+      });
+      
+      // Encontrar o valor mais recorrente (pelo menos 3 ocorrências)
+      Object.keys(valueGroups).forEach(amount => {
+        if (valueGroups[amount].length >= 3 && valueGroups[amount].length > maxCount) {
+          maxCount = valueGroups[amount].length;
+          mainSalaryPattern = parseFloat(amount);
+        }
+      });
+    }
+    
+    // Se ainda não encontrou, usar a maior transação recorrente dos últimos meses
+    if (!mainSalaryPattern) {
+      // Agrupar por mês e pegar a maior entrada de cada mês
+      const monthlyMax = {};
+      allIncomeTransactions.forEach(tx => {
+        const date = new Date(tx.date);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyMax[monthKey] || tx.amount > monthlyMax[monthKey]) {
+          monthlyMax[monthKey] = tx.amount;
+        }
+      });
+      
+      const maxValues = Object.values(monthlyMax);
+      if (maxValues.length > 0) {
+        // Usar a mediana dos maiores valores mensais
+        maxValues.sort((a, b) => a - b);
+        mainSalaryPattern = maxValues[Math.floor(maxValues.length / 2)];
+      }
+    }
+    
+    // Agrupar salários por mês (usando o padrão identificado ou valores próximos)
+    const monthlyIncome = {};
+    allIncomeTransactions.forEach(tx => {
+      // Considerar apenas transações que são salários (valor similar ao padrão ou tem palavra-chave)
+      const desc = tx.description.toLowerCase();
+      const isSalaryKeyword = salaryKeywords.some(keyword => desc.includes(keyword));
+      const roundedAmount = Math.round(tx.amount / 100) * 100;
+      const isSimilarSalary = mainSalaryPattern && Math.abs(roundedAmount - mainSalaryPattern) <= (mainSalaryPattern * 0.1);
+      
+      if (isSalaryKeyword || isSimilarSalary || (mainSalaryPattern && Math.abs(tx.amount - mainSalaryPattern) <= (mainSalaryPattern * 0.15))) {
+        const date = new Date(tx.date);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyIncome[monthKey]) {
+          monthlyIncome[monthKey] = [];
+        }
+        monthlyIncome[monthKey].push(tx.amount);
+      }
+    });
+    
+    // Calcular total por mês (soma dos salários do mês)
+    const monthlyTotals = {};
+    Object.keys(monthlyIncome).forEach(month => {
+      monthlyTotals[month] = monthlyIncome[month].reduce((a, b) => a + b, 0);
+    });
+    
+    // Calcular média mensal apenas dos meses que têm salários identificados
+    const monthlyValues = Object.values(monthlyTotals);
+    const monthlyAverage = monthlyValues.length > 0 
+      ? monthlyValues.reduce((a, b) => a + b, 0) / monthlyValues.length 
+      : (mainSalaryPattern || 0);
+    
+    // Criar projeção para próximos 6 meses
+    const now = new Date();
+    const projection = [];
+    for (let i = 1; i <= 6; i++) {
+      const futureDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      projection.push({
+        month: futureDate.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }),
+        monthKey: `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, '0')}`,
+        projectedIncome: monthlyAverage,
+        date: futureDate
+      });
+    }
+    
+    return {
+      monthlyAverage,
+      projection,
+      historicalMonths: Object.keys(monthlyTotals).map(key => ({
+        month: key,
+        income: monthlyTotals[key]
+      })).sort((a, b) => a.month.localeCompare(b.month))
+    };
+  }, [dashboardData?.transactions]);
+
   // Loading screen
   if (loading && !dashboardData) {
     return (
@@ -832,7 +1205,8 @@ function App() {
   };
 
   return (
-    <div className={clsx("min-h-screen transition-colors duration-300", theme.bg, theme.text, "selection:bg-[#00D4FF]/20")}>
+    <div className={clsx("min-h-screen transition-colors duration-300", theme.bg, theme.text, "selection:bg-[#00D4FF]/20", !darkMode && "light-mode")}>
+      
       {/* Gradient background effects */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className={clsx("absolute -top-40 -right-40 w-80 h-80 rounded-full blur-3xl", theme.gradient1)}></div>
@@ -846,7 +1220,7 @@ function App() {
             <div className="relative">
               {(processedLogoSrc || logoSrc) && !logoError ? (
                 <div 
-                  className="w-32 h-32 rounded-2xl overflow-hidden relative"
+                  className="w-40 h-40 overflow-hidden relative"
                   style={{
                     backgroundColor: 'transparent'
                   }}
@@ -863,11 +1237,10 @@ function App() {
                   />
                 </div>
               ) : (
-                <div className="w-32 h-32 bg-gradient-to-br from-[#00D4FF] to-[#7B61FF] rounded-2xl flex items-center justify-center">
-                  <span className="text-4xl font-bold text-white">F</span>
+                <div className="w-40 h-40 bg-gradient-to-br from-[#00D4FF] to-[#7B61FF] rounded-2xl flex items-center justify-center">
+                  <span className="text-5xl font-bold text-white">F</span>
                 </div>
               )}
-              <div className="absolute -inset-0.5 bg-gradient-to-br from-[#00D4FF] to-[#7B61FF] rounded-2xl blur-sm opacity-10 -z-10"></div>
             </div>
             <div>
               <h1 className="text-3xl font-semibold tracking-tight">Flux</h1>
@@ -942,25 +1315,158 @@ function App() {
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="px-8 flex gap-1">
-          {['overview', 'transactions', 'loans', 'goals', 'expected-expenses', 'analytics'].map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={clsx(
-                "px-5 py-3 text-sm font-medium transition-all relative",
-                activeTab === tab 
-                  ? theme.text 
-                  : clsx(theme.textMuted, darkMode ? "hover:text-white" : "hover:text-black")
-              )}
-            >
-              {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : tab === 'goals' ? 'Metas' : tab === 'expected-expenses' ? 'Gastos Previstos' : 'Análises'}
-              {activeTab === tab && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#00D4FF] to-[#7B61FF]"></div>
-              )}
-            </button>
-          ))}
+        {/* Navigation Tabs com Card Saldo Atual */}
+        <div className="px-8 relative">
+          <div className="flex gap-1 items-center justify-between">
+            <div className="flex gap-1">
+              {['overview', 'transactions', 'loans', 'limits', 'goals', 'expected-expenses', 'calendar', 'analytics'].map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={clsx(
+                    "px-5 py-3 text-sm font-medium transition-all relative",
+                    activeTab === tab 
+                      ? theme.text 
+                      : clsx(theme.textMuted, darkMode ? "hover:text-white" : "hover:text-black")
+                  )}
+                >
+                  {tab === 'overview' ? 'Visão Geral' : tab === 'transactions' ? 'Transações' : tab === 'loans' ? 'Empréstimos' : tab === 'limits' ? 'Limites' : tab === 'goals' ? 'Metas' : tab === 'expected-expenses' ? 'Gastos Previstos' : tab === 'calendar' ? 'Vencimentos' : 'Análises'}
+                  {activeTab === tab && (
+                    <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#00D4FF] to-[#7B61FF]"></div>
+                  )}
+                </button>
+              ))}
+            </div>
+            
+            {/* Card Saldo em Conta - Canto Superior Direito (abaixo do botão Accounts) */}
+            {dashboardData && (
+              <div className="absolute -top-12 right-8 z-20">
+                <div className={clsx(
+                  "relative overflow-visible rounded-lg p-2.5 border transition-all duration-300",
+                  "bg-gradient-to-br from-[#00D4FF]/20 via-[#00D4FF]/10 to-transparent",
+                  "border-[#00D4FF]/30 shadow-md shadow-[#00D4FF]/10",
+                  "hover:shadow-lg hover:shadow-[#00D4FF]/20",
+                  "w-40"
+                )}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-0.5 h-4 bg-gradient-to-b from-[#00D4FF] to-transparent rounded-full"></div>
+                      <div>
+                        <h3 className={clsx("text-[9px] font-medium uppercase tracking-wider text-[#00D4FF]")}>
+                          Saldo em Conta
+                        </h3>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-1 h-1 bg-[#00FF94] rounded-full animate-pulse"></div>
+                      <button
+                        onClick={() => setExpandedBalance(!expandedBalance)}
+                        className={clsx(
+                          "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all duration-200",
+                          "bg-[#00D4FF]/20 text-[#00D4FF] hover:bg-[#00D4FF]/30",
+                          "border border-[#00D4FF]/30 hover:border-[#00D4FF]/50"
+                        )}
+                      >
+                        {expandedBalance ? '▲' : '▼'}
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <p className={clsx("text-xl font-bold text-[#00D4FF] mb-1")}>
+                    {formatCurrency(bankAccountBalancePluggy || currentBankBalance)}
+                  </p>
+                
+                  {/* Detalhes expandidos */}
+                  {expandedBalance && (
+                    <div className="mt-2 pt-2 border-t border-[#00D4FF]/20">
+                      <h4 className={clsx("text-[9px] font-medium uppercase tracking-wider text-[#00D4FF] mb-1.5")}>
+                        Por Conta
+                      </h4>
+                    {(() => {
+                      const bankAccounts = (realBalances.accounts || []).filter(acc => {
+                        const accType = acc.accountType || acc.type || acc.account_type;
+                        const subtype = acc.subtype || acc.accountSubtype;
+                        // Excluir cartões de crédito explicitamente
+                        if (accType === 'CREDIT' || acc.account_type === 'CREDIT' || subtype === 'CREDIT_CARD') {
+                          return false;
+                        }
+                        // Incluir apenas contas bancárias
+                        return accType === 'BANK' || accType === 'CHECKING_ACCOUNT' || accType === 'SAVINGS_ACCOUNT' || 
+                               (acc.type && acc.type !== 'CREDIT' && acc.account_type !== 'CREDIT');
+                      });
+                      
+                      if (bankAccounts.length === 0) {
+                        return (
+                          <p className={clsx("text-[9px] text-[#64748b] text-center py-1.5")}>
+                            Nenhuma conta encontrada
+                          </p>
+                        );
+                      }
+
+                      const grouped = bankAccounts.reduce((acc, account) => {
+                        const key = `${account.bankName || account.bank_name || 'Desconhecido'}_${account.ownerName || account.owner_name || 'Desconhecido'}`;
+                        if (!acc[key]) {
+                          acc[key] = {
+                            bankName: account.bankName || account.bank_name || 'Desconhecido',
+                            ownerName: account.ownerName || account.owner_name || 'Desconhecido',
+                            accounts: [],
+                            total: 0
+                          };
+                        }
+                        acc[key].accounts.push(account);
+                        acc[key].total += account.balance || 0;
+                        return acc;
+                      }, {});
+
+                      return (
+                        <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                          {Object.values(grouped).map((group, idx) => (
+                            <div 
+                              key={idx}
+                              className={clsx(
+                                "rounded-md p-1.5 border transition-all duration-200",
+                                darkMode ? "bg-white/5 border-white/10" : "bg-black/5 border-black/10"
+                              )}
+                            >
+                              <div className="flex items-center justify-between mb-0.5">
+                                <div className="flex-1 min-w-0">
+                                  <p className={clsx("text-[9px] font-medium truncate", theme.text)}>
+                                    {group.bankName}
+                                  </p>
+                                  <p className={clsx("text-[8px] text-[#64748b] truncate")}>
+                                    {group.ownerName}
+                                  </p>
+                                </div>
+                                <p className={clsx("text-xs font-bold text-[#00D4FF] ml-1.5")}>
+                                  {formatCurrency(group.total)}
+                                </p>
+                              </div>
+                              
+                              {group.accounts.length > 1 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-white/5 space-y-0.5">
+                                  {group.accounts.map((account, accIdx) => (
+                                    <div key={accIdx} className="flex items-center justify-between text-[8px]">
+                                      <span className={clsx("text-[#64748b] truncate flex-1")}>
+                                        {account.accountName || account.name || 'Conta'}
+                                      </span>
+                                      <span className={clsx("font-medium ml-1.5", theme.text)}>
+                                        {formatCurrency(account.balance || 0)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          </div>
         </div>
       </header>
 
@@ -971,6 +1477,7 @@ function App() {
             <div className="w-1.5 h-1.5 rounded-full bg-[#00D4FF]"></div>
             <span className={clsx("text-xs uppercase tracking-widest", theme.textMuted)}>Filtros</span>
           </div>
+          
           
           {/* Period */}
           <select
@@ -1061,14 +1568,13 @@ function App() {
         
         {dashboardData && activeTab === 'overview' && (
           <>
-            {/* Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+            {/* Stats Grid - Layout Original */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
               {[
                 { label: 'Saldo Inicial', value: initialBalance, icon: '↗', positive: initialBalance >= 0 },
                 { label: 'Entradas', value: periodIncome, icon: '+', positive: true },
                 { label: 'Gastos', value: periodExpenses, icon: '−', positive: false },
                 { label: 'Saldo Final', value: endOfPeriodBalance, icon: '=', positive: endOfPeriodBalance >= 0 },
-                { label: 'Saldo Atual', value: bankAccountBalancePluggy || currentBankBalance, icon: '◉', positive: true, isLive: true },
                 { label: 'Cartões', value: realBalances.creditCardBalance, icon: '▣', positive: false },
               ].map((stat, idx) => (
                 <div key={idx} className={clsx("group relative rounded-2xl p-5 transition-all duration-300 border", theme.card, theme.cardBorder, theme.cardHover)}>
@@ -1201,7 +1707,7 @@ function App() {
                 <h3 className={clsx("text-sm font-medium uppercase tracking-wider mb-6", darkMode ? "text-white/80" : "text-black/80")}>Top Gastos</h3>
                 {topCategories.length > 0 ? (
                   <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={topCategories.slice(0, 6)} layout="vertical" cursor={false}>
+                    <BarChart data={topCategories.slice(0, 6)} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                       <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} />
                       <YAxis type="category" dataKey="category" tick={{ fill: '#64748b', fontSize: 11 }} width={100} />
@@ -1216,7 +1722,7 @@ function App() {
                         itemStyle={{ color: '#fff' }}
                         labelStyle={{ color: '#fff' }}
                       />
-                      <Bar dataKey="total" radius={[0, 4, 4, 0]} cursor={false}>
+                      <Bar dataKey="total" radius={[0, 4, 4, 0]}>
                         {topCategories.slice(0, 6).map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                         ))}
@@ -1542,7 +2048,7 @@ function App() {
         )}
 
         {/* Goals Tab */}
-        {activeTab === 'goals' && (
+        {activeTab === 'limits' && (
           <div className="space-y-6">
             {goalsData.loading ? (
               <div className="flex items-center justify-center py-12">
@@ -1556,7 +2062,7 @@ function App() {
               <>
                 {/* Header com botão de adicionar */}
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Metas de Gastos</h2>
+                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Limites de Gastos</h2>
                   <button
                     onClick={() => handleOpenGoalModal()}
                     className={clsx(
@@ -1565,14 +2071,14 @@ function App() {
                       "flex items-center gap-2"
                     )}
                   >
-                    <span>+</span> Adicionar Meta
+                    <span>+</span> Adicionar Limite
                   </button>
                 </div>
 
                 {/* Goals List */}
                 {goalsData.goals.length === 0 ? (
                   <div className={clsx("rounded-2xl p-12 text-center border", theme.card, theme.cardBorder)}>
-                    <p className={clsx("text-lg", theme.textMuted)}>Nenhuma meta encontrada</p>
+                    <p className={clsx("text-lg", theme.textMuted)}>Nenhum limite encontrado</p>
                     <button
                       onClick={() => handleOpenGoalModal()}
                       className={clsx(
@@ -1580,12 +2086,34 @@ function App() {
                         "bg-[#FFB800] text-white hover:bg-[#FFB800]/80"
                       )}
                     >
-                      Adicionar Primeira Meta
+                      Adicionar Primeiro Limite
                     </button>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {goalsData.goals.map((goal) => (
+                    {goalsData.goals.map((goal) => {
+                      // Filtrar transações relacionadas a este limite (por categoria)
+                      let relatedTransactions = [];
+                      if (dashboardData?.transactions && goal.category) {
+                        // Calcular período: início e fim do mês
+                        const periodStart = new Date(goal.periodYear, goal.periodMonth - 1, 1);
+                        periodStart.setHours(0, 0, 0, 0);
+                        const periodEnd = new Date(goal.periodYear, goal.periodMonth, 0, 23, 59, 59);
+                        
+                        relatedTransactions = dashboardData.transactions.filter(tx => {
+                          // Filtrar por categoria
+                          if (tx.category !== goal.category) return false;
+                          
+                          // Filtrar por período
+                          const txDate = new Date(tx.date);
+                          if (txDate < periodStart || txDate > periodEnd) return false;
+                          
+                          // Apenas gastos (valores negativos)
+                          return tx.amount < 0;
+                        }).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10); // Últimas 10 transações
+                      }
+                      
+                      return (
                       <div key={goal.id} className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.02] transition-transform duration-200")}>
                         {/* Background gradient effect */}
                         <div className={clsx(
@@ -1708,9 +2236,45 @@ function App() {
                               </div>
                             )}
                           </div>
+
+                          {/* Transações usando details/summary (igual Gastos Previstos) */}
+                          {relatedTransactions.length > 0 && (
+                            <details className="relative z-10 mt-2">
+                              <summary className={clsx(
+                                "cursor-pointer text-xs font-medium py-1.5 px-2 rounded transition-all",
+                                darkMode ? "bg-white/5 hover:bg-white/10" : "bg-black/5 hover:bg-black/10",
+                                theme.textMuted,
+                                "list-none flex items-center justify-between"
+                              )}>
+                                <span>Transações ({relatedTransactions.length})</span>
+                                <span className="text-xs ml-1">▼</span>
+                              </summary>
+                              <div className="mt-2 space-y-1.5 max-h-64 overflow-y-auto">
+                                {relatedTransactions.map((tx) => (
+                                  <div 
+                                    key={tx.id} 
+                                    className={clsx(
+                                      "p-2 rounded",
+                                      darkMode ? "bg-white/5" : "bg-black/5"
+                                    )}
+                                  >
+                                    <div className="flex justify-between items-start mb-0.5">
+                                      <span className={clsx("text-xs font-medium", theme.text)}>{formatDate(tx.date)}</span>
+                                      <span className={clsx("text-xs font-semibold", theme.text)}>{formatCurrency(Math.abs(tx.amount))}</span>
+                                    </div>
+                                    <p className={clsx("text-xs truncate", theme.textMuted)}>{tx.description || 'Sem descrição'}</p>
+                                    {tx.category && (
+                                      <span className={clsx("text-[9px]", theme.textMuted)}>{tx.category}</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -1731,19 +2295,61 @@ function App() {
               </div>
             ) : (
               <>
-                {/* Header com botão de adicionar */}
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Gastos Previstos</h2>
-                  <button
-                    onClick={() => handleOpenExpectedExpenseModal()}
-                    className={clsx(
-                      "px-4 py-2 rounded-lg font-medium transition-all",
-                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
-                      "flex items-center gap-2"
-                    )}
-                  >
-                    <span>+</span> Adicionar Gasto
-                  </button>
+                {/* Header com card de valor total */}
+                <div className="flex items-center justify-between mb-4 gap-4">
+                  <div className="flex items-center gap-3">
+                    <h2 className={clsx("text-xl font-semibold", theme.text)}>Gastos Previstos</h2>
+                    {/* Botão Adicionar Gasto - menor, ao lado do título */}
+                    <button
+                      onClick={() => handleOpenExpectedExpenseModal()}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+                        "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                        "flex items-center gap-1.5"
+                      )}
+                    >
+                      <span>+</span> Adicionar Gasto
+                    </button>
+                  </div>
+                  {/* Card Total Previsto e Total Pago - menor, no canto direito */}
+                  {expectedExpensesData.expenses.length > 0 && (
+                    <div className={clsx(
+                      "rounded-2xl p-3 border transition-all duration-300",
+                      theme.card,
+                      theme.cardBorder,
+                      "min-w-[160px]"
+                    )}>
+                      {/* Total Previsto */}
+                      <div className="mb-3">
+                        <h3 className={clsx("text-[10px] font-medium uppercase tracking-wider mb-1", darkMode ? "text-white/80" : "text-black/80")}>
+                          Total Previsto
+                        </h3>
+                        <p className={clsx("text-lg font-bold", theme.text)}>
+                          {formatCurrency(
+                            expectedExpensesData.expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0)
+                          )}
+                        </p>
+                      </div>
+                      
+                      {/* Total Pago */}
+                      <div>
+                        <h3 className={clsx("text-[10px] font-medium uppercase tracking-wider mb-1", darkMode ? "text-white/80" : "text-black/80")}>
+                          Total Pago
+                        </h3>
+                        <p className={clsx("text-lg font-bold", theme.text)}>
+                          {formatCurrency(
+                            expectedExpensesData.expenses.reduce((sum, exp) => {
+                              // Calcular total pago a partir das transações encontradas
+                              const totalPaid = exp.matchingTransactions && exp.matchingTransactions.length > 0
+                                ? exp.matchingTransactions.reduce((txSum, tx) => txSum + Math.abs(tx.amount), 0)
+                                : (exp.totalPaid || 0);
+                              return sum + totalPaid;
+                            }, 0)
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Expenses List */}
@@ -1761,43 +2367,55 @@ function App() {
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                     {expectedExpensesData.expenses.map((expense) => (
-                      <div key={expense.id} className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.02] transition-transform duration-200")}>
+                      <div key={expense.id} className={clsx("rounded-lg p-3 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.01] transition-transform duration-200")}>
                         {/* Background gradient effect */}
                         <div className={clsx(
-                          "absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-10 -z-0",
+                          "absolute top-0 right-0 w-16 h-16 rounded-full blur-2xl opacity-10 -z-0",
                           expense.isPaid ? "bg-[#00FF94]" : expense.isActive ? "bg-[#FFB800]" : "bg-[#64748b]"
                         )}></div>
 
                         {/* Header */}
-                        <div className="relative z-10 flex items-start justify-between mb-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-3">
+                        <div className="relative z-10 flex items-start justify-between mb-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-1.5">
                               {expense.isPaid ? (
-                                <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/40 flex items-center gap-1.5">
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/40 flex items-center gap-0.5">
                                   <span>✓</span> PAGO
                                 </span>
                               ) : expense.isActive ? (
-                                <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-[#FFB800]/20 text-[#FFB800] border border-[#FFB800]/40 flex items-center gap-1.5">
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-[#FFB800]/20 text-[#FFB800] border border-[#FFB800]/40 flex items-center gap-0.5">
                                   <span>⏳</span> PENDENTE
                                 </span>
                               ) : (
-                                <span className={clsx("px-3 py-1.5 rounded-full text-xs font-medium", darkMode ? "bg-white/5 text-white/70" : "bg-black/5 text-black/70")}>
+                                <span className={clsx("px-1.5 py-0.5 rounded-full text-[9px] font-medium", darkMode ? "bg-white/5 text-white/70" : "bg-black/5 text-black/70")}>
                                   Encerrado
                                 </span>
                               )}
                             </div>
-                            <h3 className={clsx("text-xl font-bold mb-1", theme.text)}>{expense.name}</h3>
-                            <p className={clsx("text-xs font-medium", theme.textMuted)}>
+                            <h3 className={clsx("text-base font-bold mb-0.5 truncate", theme.text)}>{expense.name}</h3>
+                            <p className={clsx("text-[9px] font-medium truncate", theme.textMuted)}>
                               {expense.paymentMethod}
                             </p>
                           </div>
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-0.5 ml-1">
+                            <button
+                              onClick={() => handleMarkAsPaid(expense.id, expense.isPaid)}
+                              className={clsx(
+                                "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all",
+                                expense.isPaid 
+                                  ? "bg-[#00FF94]/20 text-[#00FF94] hover:bg-[#00FF94]/30 border border-[#00FF94]/30"
+                                  : "bg-[#64748b]/20 text-[#64748b] hover:bg-[#64748b]/30 border border-[#64748b]/30"
+                              )}
+                              title={expense.isPaid ? "Marcar como não pago" : "Marcar como pago"}
+                            >
+                              {expense.isPaid ? "✓" : "○"}
+                            </button>
                             <button
                               onClick={() => handleOpenExpectedExpenseModal(expense)}
                               className={clsx(
-                                "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all",
                                 "bg-[#7B61FF]/20 text-[#7B61FF] hover:bg-[#7B61FF]/30 border border-[#7B61FF]/30"
                               )}
                               title="Editar"
@@ -1807,7 +2425,7 @@ function App() {
                             <button
                               onClick={() => handleDeleteExpectedExpense(expense.id)}
                               className={clsx(
-                                "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                "px-1.5 py-0.5 rounded text-[9px] font-medium transition-all",
                                 "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30 border border-[#FF4757]/30"
                               )}
                               title="Deletar"
@@ -1818,24 +2436,62 @@ function App() {
                         </div>
 
                         {/* Amount Display */}
-                        <div className="mb-4 relative z-10">
-                          <div className="flex items-baseline gap-2 mb-1">
-                            <span className={clsx("text-2xl font-bold", expense.isPaid ? "text-[#00FF94]" : "text-[#FFB800]", theme.text)}>
-                              {formatCurrency(expense.amount)}
-                            </span>
+                        <div className="mb-2 relative z-10">
+                          <div className="flex flex-col gap-1 mb-1">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className={clsx("text-sm font-bold", expense.isPaid ? "text-[#00FF94]" : "text-[#FFB800]", theme.text)}>
+                                {formatCurrency(expense.amount)}
+                              </span>
+                              <span className={clsx("text-[9px] font-medium", theme.textMuted)}>
+                                Previsto
+                              </span>
+                            </div>
+                            
+                            {/* Valor Pago - sempre calcular a partir das transações encontradas */}
+                            {(() => {
+                              // SEMPRE calcular total pago a partir das transações encontradas
+                              const calculatedTotal = expense.matchingTransactions && expense.matchingTransactions.length > 0
+                                ? expense.matchingTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+                                : 0;
+                              
+                              // Mostrar sempre, mesmo que seja 0 (para indicar que não foi pago ainda)
+                              return (
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className={clsx(
+                                    "text-sm font-bold",
+                                    calculatedTotal >= expense.amount ? "text-[#00FF94]" : calculatedTotal > 0 ? "text-[#FFB800]" : "text-gray-500"
+                                  )}>
+                                    {formatCurrency(calculatedTotal)}
+                                  </span>
+                                  <span className={clsx("text-[9px] font-medium", theme.textMuted)}>
+                                    Pago
+                                  </span>
+                                  {calculatedTotal > 0 && expense.amount > 0 && (
+                                    <span className={clsx("text-[9px] font-medium", calculatedTotal >= expense.amount ? "text-[#00FF94]" : "text-[#FFB800]")}>
+                                      ({((calculatedTotal / expense.amount) * 100).toFixed(0)}%)
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
-                          <div className="flex items-center justify-between">
-                            <span className={clsx("text-xs font-medium", theme.textMuted)}>
-                              Data de encerramento: {expense.endDateLabel}
+                          <div className="flex items-center justify-between mt-1">
+                            <span className={clsx("text-[9px] font-medium truncate", theme.textMuted)}>
+                              {expense.endDateLabel}
                             </span>
+                            {expense.isPaidManually && (
+                              <span className={clsx("text-[9px] font-medium text-[#00FF94]")}>
+                                Manual
+                              </span>
+                            )}
                           </div>
                         </div>
 
                         {/* Payment Info */}
                         {expense.isPaid && expense.lastPaymentDate && (
-                          <div className="mb-4 pt-4 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
-                            <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Último pagamento</p>
-                            <p className={clsx("text-sm font-semibold", theme.text)}>
+                          <div className="mb-2 pt-2 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
+                            <p className={clsx("text-[9px] font-medium mb-0.5", theme.textMuted)}>Último pagamento</p>
+                            <p className={clsx("text-[10px] font-semibold", theme.text)}>
                               {formatDate(expense.lastPaymentDate)} - {formatCurrency(expense.lastPaymentAmount)}
                             </p>
                           </div>
@@ -1843,27 +2499,26 @@ function App() {
 
                         {/* Matching Transactions */}
                         {expense.matchingTransactions && expense.matchingTransactions.length > 0 && (
-                          <details className="relative z-10 mt-4">
+                          <details className="relative z-10 mt-2">
                             <summary className={clsx(
-                              "cursor-pointer text-xs font-medium py-2 px-3 rounded-lg transition-all",
+                              "cursor-pointer text-[9px] font-medium py-1 px-1.5 rounded transition-all",
                               darkMode ? "bg-white/5 hover:bg-white/10" : "bg-black/5 hover:bg-black/10",
                               theme.textMuted
                             )}>
-                              <span>Transações Encontradas ({expense.matchingTransactions.length})</span>
-                              <span className="text-xs ml-2">▼</span>
+                              <span>Transações ({expense.matchingTransactions.length})</span>
+                              <span className="text-[9px] ml-1">▼</span>
                             </summary>
-                            <div className="mt-2 space-y-2 max-h-48 overflow-y-auto">
+                            <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
                               {expense.matchingTransactions.map((tx) => (
-                                <div key={tx.id} className={clsx("p-2 rounded text-xs", darkMode ? "bg-white/5" : "bg-black/5")}>
-                                  <div className="flex justify-between items-start mb-1">
+                                <div key={tx.id} className={clsx("p-1 rounded text-[9px]", darkMode ? "bg-white/5" : "bg-black/5")}>
+                                  <div className="flex justify-between items-start mb-0.5">
                                     <span className={clsx("font-medium", theme.text)}>{formatDate(tx.date)}</span>
                                     <span className={clsx("font-semibold", theme.text)}>{formatCurrency(Math.abs(tx.amount))}</span>
                                   </div>
-                                  <p className={clsx("text-xs", theme.textMuted)}>{tx.description}</p>
-                                  <div className="flex gap-2 mt-1">
-                                    <span className={clsx("text-xs", theme.textMuted)}>{tx.category}</span>
-                                    {tx.bankName && <span className={clsx("text-xs", theme.textMuted)}>• {tx.bankName}</span>}
-                                    {tx.ownerName && <span className={clsx("text-xs", theme.textMuted)}>• {tx.ownerName}</span>}
+                                  <p className={clsx("text-[9px] truncate", theme.textMuted)}>{tx.description}</p>
+                                  <div className="flex gap-1 mt-0.5">
+                                    <span className={clsx("text-[9px]", theme.textMuted)}>{tx.category}</span>
+                                    {tx.bankName && <span className={clsx("text-[9px]", theme.textMuted)}>• {tx.bankName}</span>}
                                   </div>
                                 </div>
                               ))}
@@ -1879,54 +2534,624 @@ function App() {
           </div>
         )}
 
+        {/* Financial Goals Tab (Novas Metas) */}
+        {activeTab === 'goals' && (
+          <div className="space-y-6">
+            {financialGoalsData.loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-10 h-10 border-2 border-[#00D4FF]/30 border-t-[#00D4FF] rounded-full animate-spin"></div>
+              </div>
+            ) : financialGoalsData.error ? (
+              <div className={clsx("p-4 rounded-lg border", theme.card, theme.cardBorder)}>
+                <p className="text-[#FF4757]">Erro: {financialGoalsData.error}</p>
+              </div>
+            ) : (
+              <>
+                {/* Header com botão de adicionar */}
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className={clsx("text-xl font-semibold", theme.text)}>Metas Financeiras</h2>
+                  <button
+                    onClick={() => handleOpenFinancialGoalModal()}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                      "flex items-center gap-2"
+                    )}
+                  >
+                    <span>+</span> Adicionar Meta
+                  </button>
+                </div>
+
+                {/* Goals List */}
+                {financialGoalsData.goals.length === 0 ? (
+                  <div className={clsx("rounded-2xl p-12 text-center border", theme.card, theme.cardBorder)}>
+                    <p className={clsx("text-lg", theme.textMuted)}>Nenhuma meta encontrada</p>
+                    <p className={clsx("text-sm mt-2", theme.textMuted)}>Crie metas como reserva de emergência, compras planejadas, etc.</p>
+                    <button
+                      onClick={() => handleOpenFinancialGoalModal()}
+                      className={clsx(
+                        "mt-4 px-4 py-2 rounded-lg font-medium transition-all",
+                        "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80"
+                      )}
+                    >
+                      Adicionar Primeira Meta
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {financialGoalsData.goals.map((goal) => (
+                      <div key={goal.id} className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder, "hover:scale-[1.02] transition-transform duration-200")}>
+                        {/* Background gradient effect */}
+                        <div className={clsx(
+                          "absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-10 -z-0",
+                          goal.isCompleted ? "bg-[#00FF94]" : "bg-[#00D4FF]"
+                        )}></div>
+                        
+                        <div className="relative z-10">
+                          {/* Header */}
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-3">
+                                {goal.type === 'emergency_fund' && (
+                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00D4FF]/20 text-[#00D4FF] border border-[#00D4FF]/40">
+                                    🛡️ Reserva de Emergência
+                                  </span>
+                                )}
+                                {goal.isCompleted ? (
+                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00FF94]/20 text-[#00FF94] border border-[#00FF94]/40 flex items-center gap-1.5">
+                                    <span>✓</span> META ATINGIDA
+                                  </span>
+                                ) : (
+                                  <span className={clsx("px-3 py-1.5 rounded-full text-xs font-medium", darkMode ? "bg-white/5 text-white/70" : "bg-black/5 text-black/70")}>
+                                    Em andamento
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className={clsx("text-xl font-bold mb-1", theme.text)}>{goal.name}</h3>
+                              {goal.description && (
+                                <p className={clsx("text-xs", theme.textMuted)}>{goal.description}</p>
+                              )}
+                              {goal.target_date && (
+                                <p className={clsx("text-xs font-medium mt-1", theme.textMuted)}>
+                                  Meta: {DateTime.fromISO(goal.target_date).toLocaleString(DateTime.DATE_MED)}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => handleOpenFinancialGoalModal(goal)}
+                                className={clsx(
+                                  "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                  "bg-[#7B61FF]/20 text-[#7B61FF] hover:bg-[#7B61FF]/30 border border-[#7B61FF]/30"
+                                )}
+                                title="Editar"
+                              >
+                                ✎
+                              </button>
+                              <button
+                                onClick={() => handleDeleteFinancialGoal(goal.id)}
+                                className={clsx(
+                                  "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                  "bg-[#FF4757]/20 text-[#FF4757] hover:bg-[#FF4757]/30 border border-[#FF4757]/30"
+                                )}
+                                title="Deletar"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Amount Display */}
+                          <div className="mb-4">
+                            <div className="flex items-baseline gap-2 mb-1">
+                              <span className={clsx("text-2xl font-bold", goal.isCompleted ? "text-[#00FF94]" : "text-[#00D4FF]", theme.text)}>
+                                {formatCurrency(goal.current_amount)}
+                              </span>
+                              <span className={clsx("text-sm", theme.textMuted)}>
+                                / {formatCurrency(goal.target_amount)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className={clsx("text-xs font-medium", theme.textMuted)}>
+                                {goal.progress.toFixed(1)}% concluído
+                              </span>
+                              {!goal.isCompleted && (
+                                <span className="text-xs font-bold text-[#00D4FF]">
+                                  Faltam {formatCurrency(goal.remaining)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Progress Bar */}
+                          <div className="mb-4">
+                            <div className={clsx("h-4 rounded-full overflow-hidden relative", darkMode ? "bg-white/10" : "bg-black/10")}>
+                              <div 
+                                className={clsx(
+                                  "h-full transition-all duration-500 rounded-full",
+                                  goal.isCompleted 
+                                    ? "bg-gradient-to-r from-[#00FF94] to-[#00D4AA]" 
+                                    : "bg-gradient-to-r from-[#00D4FF] to-[#7B61FF]"
+                                )}
+                                style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }}
+                              ></div>
+                            </div>
+                          </div>
+
+                          {/* Details Grid */}
+                          <div className="grid grid-cols-2 gap-3 pt-4 border-t" style={{ borderColor: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }}>
+                            <div>
+                              <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Valor Alvo</p>
+                              <p className={clsx("text-sm font-semibold", theme.text)}>
+                                {formatCurrency(goal.target_amount)}
+                              </p>
+                            </div>
+                            {goal.isCompleted ? (
+                              <div>
+                                <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Status</p>
+                                <p className="text-sm font-semibold text-[#00FF94]">
+                                  Concluída ✓
+                                </p>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Faltam</p>
+                                <p className="text-sm font-semibold text-[#00D4FF]">
+                                  {formatCurrency(goal.remaining)}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Sugestão de valor mensal para Reserva de Emergência */}
+                          {goal.type === 'emergency_fund' && goal.suggested_monthly_amount && !goal.isCompleted && (
+                            <div className={clsx("mt-4 p-3 rounded-lg border", "bg-[#00D4FF]/10 border-[#00D4FF]/30")}>
+                              <p className={clsx("text-xs font-medium mb-1 text-[#00D4FF]")}>💡 Sugestão Mensal</p>
+                              <p className={clsx("text-sm font-semibold text-[#00D4FF]")}>
+                                {formatCurrency(goal.suggested_monthly_amount)}/mês
+                              </p>
+                              <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                                Para atingir a meta em {goal.target_date ? 
+                                  Math.ceil((new Date(goal.target_date) - new Date()) / (1000 * 60 * 60 * 24 * 30)) : 
+                                  12} meses
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* Analytics Tab */}
+        {activeTab === 'calendar' && (
+          <div className="space-y-6">
+            {dueDatesData.loading ? (
+              <div className="text-center py-12">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#00D4FF]"></div>
+                <p className={clsx("mt-4", theme.textMuted)}>Carregando vencimentos...</p>
+              </div>
+            ) : dueDatesData.error ? (
+              <div className={clsx("p-4 rounded-lg border", theme.card, theme.border)}>
+                <p className={clsx("text-red-400")}>Erro: {dueDatesData.error}</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-2xl font-semibold">Calendário de Vencimentos</h2>
+                  <button
+                    onClick={() => handleOpenDueDateModal()}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                      "bg-gradient-to-r from-[#00D4FF] to-[#7B61FF] text-white hover:opacity-90"
+                    )}
+                  >
+                    + Adicionar Vencimento
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
+                    // Buscar itens tanto com chave numérica quanto string
+                    const dayItems = dueDatesData.calendar[day] || dueDatesData.calendar[String(day)] || [];
+                    const now = new Date();
+                    const isPast = day < now.getDate();
+                    const isToday = day === now.getDate();
+
+                    return (
+                      <div
+                        key={day}
+                        className={clsx(
+                          "p-3 rounded-lg border min-h-[120px]",
+                          theme.card,
+                          theme.border,
+                          isToday && "ring-2 ring-[#00D4FF]",
+                          isPast && "opacity-60"
+                        )}
+                      >
+                        <div className={clsx(
+                          "text-sm font-semibold mb-2",
+                          isToday ? "text-[#00D4FF]" : theme.text
+                        )}>
+                          Dia {day}
+                        </div>
+                        <div className="space-y-1">
+                          {dayItems.length === 0 ? (
+                            <p className={clsx("text-xs", theme.textMuted)}>Sem vencimentos</p>
+                          ) : (
+                            dayItems.map((item) => (
+                              <div
+                                key={`${item.source_type || 'custom'}-${item.id}`}
+                                className={clsx(
+                                  "text-xs p-1.5 rounded border relative group",
+                                  theme.card,
+                                  theme.border
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-1">
+                                  <div className="flex-1 min-w-0">
+                                    <div className={clsx("font-medium", theme.text)}>{item.name}</div>
+                                    {item.amount && (
+                                      <div className={clsx("text-[#00D4FF] mt-0.5")}>
+                                        {formatCurrency(item.amount)}
+                                      </div>
+                                    )}
+                                  </div>
+                                  {item.source_type === 'custom' || !item.source_type ? (
+                                    <button
+                                      onClick={() => handleDeleteDueDate(item.id)}
+                                      className={clsx(
+                                        "opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-red-500/20 text-red-400 flex-shrink-0"
+                                      )}
+                                      title="Remover"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {dashboardData && activeTab === 'analytics' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* All Categories */}
+          <div className="space-y-6">
+            {/* Cards de Métricas Principais */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder)}>
+                <div className="absolute top-0 right-0 w-32 h-32 bg-[#00D4FF]/10 rounded-full blur-3xl -z-0"></div>
+                <div className="relative z-10">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs text-[#00D4FF] uppercase tracking-wider font-medium">Entradas</h3>
+                    <div className="w-8 h-8 rounded-lg bg-[#00D4FF]/20 flex items-center justify-center">
+                      <svg className="w-4 h-4 text-[#00D4FF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                      </svg>
+                    </div>
+                  </div>
+                  <p className={clsx("text-3xl font-bold mb-1", theme.text)}>{formatCurrency(periodIncome)}</p>
+                  <p className={clsx("text-xs", theme.textMuted)}>Período atual</p>
+                </div>
+              </div>
+
+              <div className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder)}>
+                <div className="absolute top-0 right-0 w-32 h-32 bg-[#FF4757]/10 rounded-full blur-3xl -z-0"></div>
+                <div className="relative z-10">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs text-[#FF4757] uppercase tracking-wider font-medium">Gastos</h3>
+                    <div className="w-8 h-8 rounded-lg bg-[#FF4757]/20 flex items-center justify-center">
+                      <svg className="w-4 h-4 text-[#FF4757]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                      </svg>
+                    </div>
+                  </div>
+                  <p className={clsx("text-3xl font-bold mb-1", theme.text)}>{formatCurrency(periodExpenses)}</p>
+                  <p className={clsx("text-xs", theme.textMuted)}>Período atual</p>
+                </div>
+              </div>
+
+              <div className={clsx("rounded-2xl p-6 border relative overflow-hidden", theme.card, theme.cardBorder)}>
+                <div className={clsx("absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl -z-0", periodMovement >= 0 ? "bg-[#00FF94]/10" : "bg-[#FF4757]/10")}></div>
+                <div className="relative z-10">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className={clsx("text-xs uppercase tracking-wider font-medium", periodMovement >= 0 ? "text-[#00FF94]" : "text-[#FF4757]")}>Balanço</h3>
+                    <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center", periodMovement >= 0 ? "bg-[#00FF94]/20" : "bg-[#FF4757]/20")}>
+                      {periodMovement >= 0 ? (
+                        <svg className="w-4 h-4 text-[#00FF94]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-4 h-4 text-[#FF4757]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      )}
+                    </div>
+                  </div>
+                  <p className={clsx(
+                    "text-3xl font-bold mb-1",
+                    periodMovement >= 0 ? "text-[#00FF94]" : "text-[#FF4757]"
+                  )}>
+                    {formatCurrency(periodMovement)}
+                  </p>
+                  <p className={clsx("text-xs", theme.textMuted)}>
+                    {periodIncome > 0 ? `${((periodMovement / periodIncome) * 100).toFixed(1)}% da renda` : 'Sem renda'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Gráfico de Pizza - Distribuição por Categoria */}
             <div className={clsx("rounded-2xl p-6 border", theme.card, theme.cardBorder)}>
-              <h3 className={clsx("text-sm font-medium uppercase tracking-wider mb-6", darkMode ? "text-white/80" : "text-black/80")}>Todas as Categorias</h3>
-              <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                {dashboardData.categoryTotals.map((cat, idx) => (
-                  <div key={idx} className="flex items-center gap-4">
-                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}></div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className={clsx("text-sm", theme.text)}>{cat.category}</span>
-                        <span className={clsx("text-sm font-medium", theme.text)}>{formatCurrency(cat.total)}</span>
-                      </div>
-                      <div className={clsx("h-1.5 rounded-full overflow-hidden", darkMode ? "bg-white/5" : "bg-black/5")}>
+              <h3 className={clsx("text-lg font-semibold mb-6", theme.text)}>Distribuição de Gastos</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="h-64 flex items-center justify-center">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={dashboardData.categoryTotals.slice(0, 8).map((cat, idx) => ({
+                          name: cat.category,
+                          value: cat.total,
+                          color: CHART_COLORS[idx % CHART_COLORS.length]
+                        }))}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {dashboardData.categoryTotals.slice(0, 8).map((cat, idx) => (
+                          <Cell key={`cell-${idx}`} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        formatter={(value) => formatCurrency(value)}
+                        contentStyle={{
+                          backgroundColor: darkMode ? '#1a1a2e' : '#ffffff',
+                          border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                          borderRadius: '8px',
+                          color: darkMode ? '#ffffff' : '#000000'
+                        }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {dashboardData.categoryTotals.slice(0, 8).map((cat, idx) => {
+                    const percentage = dashboardData.categoryTotals[0]?.total 
+                      ? (cat.total / dashboardData.categoryTotals[0].total * 100) 
+                      : 0;
+                    return (
+                      <div key={idx} className="flex items-center gap-3">
                         <div 
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{ 
-                            width: `${(cat.total / dashboardData.categoryTotals[0].total * 100)}%`,
-                            backgroundColor: CHART_COLORS[idx % CHART_COLORS.length]
-                          }}
+                          className="w-3 h-3 rounded-full flex-shrink-0" 
+                          style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}
                         ></div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className={clsx("text-sm font-medium truncate", theme.text)}>{cat.category}</span>
+                            <span className={clsx("text-sm font-bold ml-2", theme.text)}>{formatCurrency(cat.total)}</span>
+                          </div>
+                          <div className={clsx("h-2 rounded-full overflow-hidden", darkMode ? "bg-white/5" : "bg-black/5")}>
+                            <div 
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{ 
+                                width: `${percentage}%`,
+                                backgroundColor: CHART_COLORS[idx % CHART_COLORS.length]
+                              }}
+                            ></div>
+                          </div>
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Top Categorias - Gráfico de Barras Horizontal */}
+            <div className={clsx("rounded-2xl p-6 border", theme.card, theme.cardBorder)}>
+              <h3 className={clsx("text-lg font-semibold mb-6", theme.text)}>Top Categorias</h3>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={dashboardData.categoryTotals.slice(0, 6).reverse().map((cat, idx) => ({
+                      name: cat.category.length > 15 ? cat.category.substring(0, 15) + '...' : cat.category,
+                      value: cat.total,
+                      fullName: cat.category
+                    }))}
+                    layout="vertical"
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                    <XAxis 
+                      type="number" 
+                      tickFormatter={(value) => formatCurrency(value)}
+                      stroke={darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'}
+                    />
+                    <YAxis 
+                      type="category" 
+                      dataKey="name" 
+                      width={100}
+                      stroke={darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'}
+                    />
+                    <Tooltip 
+                      formatter={(value, name, props) => [
+                        formatCurrency(value),
+                        props.payload.fullName
+                      ]}
+                      contentStyle={{
+                        backgroundColor: darkMode ? '#1a1a2e' : '#ffffff',
+                        border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                        borderRadius: '8px',
+                        color: darkMode ? '#ffffff' : '#000000'
+                      }}
+                    />
+                    <Bar 
+                      dataKey="value" 
+                      radius={[0, 8, 8, 0]}
+                    >
+                      {dashboardData.categoryTotals.slice(0, 6).reverse().map((cat, idx) => (
+                        <Cell key={`cell-${idx}`} fill={CHART_COLORS[(5 - idx) % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Projeção de Entradas */}
+            <div className={clsx("rounded-2xl p-6 border", theme.card, theme.cardBorder)}>
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className={clsx("text-lg font-semibold mb-1", theme.text)}>Projeção de Entradas</h3>
+                  <p className={clsx("text-sm", theme.textMuted)}>
+                    Baseado na média dos últimos 6 meses
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className={clsx("text-xs uppercase tracking-wider mb-1", theme.textMuted)}>Média Mensal</p>
+                  <p className={clsx("text-2xl font-bold text-[#00D4FF]", theme.text)}>
+                    {formatCurrency(incomeProjection.monthlyAverage)}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Gráfico de Projeção */}
+              <div className="h-64 mb-6">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={[
+                      ...incomeProjection.historicalMonths.slice(-3).map(m => ({
+                        month: new Date(m.month + '-01').toLocaleDateString('pt-BR', { month: 'short' }),
+                        value: m.income,
+                        type: 'histórico'
+                      })),
+                      ...incomeProjection.projection.map(p => ({
+                        month: p.month.split(' ')[0],
+                        value: p.projectedIncome,
+                        type: 'projeção'
+                      }))
+                    ]}
+                    margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#00D4FF" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#00D4FF" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                    <XAxis 
+                      dataKey="month" 
+                      stroke={darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <YAxis 
+                      tickFormatter={(value) => formatCurrency(value)}
+                      stroke={darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <Tooltip 
+                      formatter={(value) => formatCurrency(value)}
+                      contentStyle={{
+                        backgroundColor: darkMode ? '#1a1a2e' : '#ffffff',
+                        border: `1px solid ${darkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                        borderRadius: '8px',
+                        color: darkMode ? '#ffffff' : '#000000'
+                      }}
+                    />
+                    <Area 
+                      type="monotone" 
+                      dataKey="value" 
+                      stroke="#00D4FF" 
+                      strokeWidth={2}
+                      fill="url(#incomeGradient)"
+                      dot={{ fill: '#00D4FF', r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Lista de Projeção Mensal */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {incomeProjection.projection.map((proj, idx) => (
+                  <div
+                    key={idx}
+                    className={clsx(
+                      "p-4 rounded-lg border relative overflow-hidden",
+                      theme.card,
+                      theme.border,
+                      "hover:scale-[1.02] transition-transform"
+                    )}
+                  >
+                    <div className="absolute top-0 right-0 w-20 h-20 bg-[#00D4FF]/5 rounded-full blur-2xl -z-0"></div>
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={clsx("text-sm font-medium", theme.text)}>{proj.month}</span>
+                        <span className="px-2 py-0.5 rounded-full text-xs bg-[#00D4FF]/20 text-[#00D4FF] border border-[#00D4FF]/30">
+                          Projeção
+                        </span>
+                      </div>
+                      <p className={clsx("text-xl font-bold text-[#00D4FF]", theme.text)}>
+                        {formatCurrency(proj.projectedIncome)}
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Summary Stats */}
-            <div className="space-y-4">
-              <div className="bg-gradient-to-br from-[#00D4FF]/10 to-transparent border border-[#00D4FF]/20 rounded-2xl p-6">
-                <h3 className="text-xs text-[#00D4FF] uppercase tracking-wider mb-2">Total Entradas</h3>
-                <p className={clsx("text-3xl font-bold", theme.text)}>{formatCurrency(periodIncome)}</p>
-              </div>
-              <div className="bg-gradient-to-br from-[#FF4757]/10 to-transparent border border-[#FF4757]/20 rounded-2xl p-6">
-                <h3 className="text-xs text-[#FF4757] uppercase tracking-wider mb-2">Total Gastos</h3>
-                <p className={clsx("text-3xl font-bold", theme.text)}>{formatCurrency(periodExpenses)}</p>
-              </div>
-              <div className="bg-gradient-to-br from-[#7B61FF]/10 to-transparent border border-[#7B61FF]/20 rounded-2xl p-6">
-                <h3 className="text-xs text-[#7B61FF] uppercase tracking-wider mb-2">Balanço</h3>
-                <p className={clsx(
-                  "text-3xl font-bold",
-                  periodMovement >= 0 ? "text-[#00FF94]" : "text-[#FF4757]"
-                )}>
-                  {formatCurrency(periodMovement)}
-                </p>
+            {/* Todas as Categorias - Lista Completa */}
+            <div className={clsx("rounded-2xl p-6 border", theme.card, theme.cardBorder)}>
+              <h3 className={clsx("text-lg font-semibold mb-6", theme.text)}>Todas as Categorias</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto">
+                {dashboardData.categoryTotals.map((cat, idx) => {
+                  const percentage = dashboardData.categoryTotals[0]?.total 
+                    ? (cat.total / dashboardData.categoryTotals[0].total * 100) 
+                    : 0;
+                  return (
+                    <div 
+                      key={idx} 
+                      className={clsx("p-4 rounded-lg border", theme.card, theme.border, "hover:scale-[1.02] transition-transform")}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div 
+                          className="w-2 h-2 rounded-full" 
+                          style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }}
+                        ></div>
+                        <span className={clsx("text-sm font-medium", theme.text)}>{cat.category}</span>
+                      </div>
+                      <p className={clsx("text-lg font-bold mb-2", theme.text)}>{formatCurrency(cat.total)}</p>
+                      <div className={clsx("h-1.5 rounded-full overflow-hidden", darkMode ? "bg-white/5" : "bg-black/5")}>
+                        <div 
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{ 
+                            width: `${percentage}%`,
+                            backgroundColor: CHART_COLORS[idx % CHART_COLORS.length]
+                          }}
+                        ></div>
+                      </div>
+                      <p className={clsx("text-xs mt-1", theme.textMuted)}>{percentage.toFixed(1)}% do total</p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -2536,6 +3761,234 @@ function App() {
           </div>
         </div>
       )}
+
+        {/* Financial Goal Modal */}
+        {showFinancialGoalModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+            <div className={clsx("relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                  {editingFinancialGoal ? 'Editar Meta' : 'Adicionar Meta'}
+                </h2>
+                <button 
+                  onClick={handleCloseFinancialGoalModal}
+                  className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Nome da Meta *</label>
+                  <input
+                    type="text"
+                    value={financialGoalForm.name}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, name: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: Reserva de Emergência, iPhone 15, Viagem para Europa"
+                  />
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Tipo *</label>
+                  <select
+                    value={financialGoalForm.type}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, type: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  >
+                    <option value="custom">Personalizada</option>
+                    <option value="emergency_fund">Reserva de Emergência</option>
+                    <option value="purchase">Compra Planejada</option>
+                    <option value="travel">Viagem</option>
+                    <option value="investment">Investimento</option>
+                    <option value="education">Educação</option>
+                  </select>
+                  {financialGoalForm.type === 'emergency_fund' && (
+                    <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                      A reserva de emergência será calculada automaticamente com base no saldo atual das suas contas
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor Alvo *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={financialGoalForm.targetAmount}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, targetAmount: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                  {financialGoalForm.type === 'emergency_fund' && (
+                    <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                      Recomendado: 6 meses de gastos mensais
+                    </p>
+                  )}
+                </div>
+
+                {financialGoalForm.type !== 'emergency_fund' && (
+                  <div>
+                    <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor Atual</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={financialGoalForm.currentAmount}
+                      onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, currentAmount: e.target.value })}
+                      className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                      placeholder="0.00"
+                    />
+                    <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                      Quanto você já tem guardado para esta meta
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Descrição</label>
+                  <textarea
+                    value={financialGoalForm.description}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, description: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Adicione uma descrição ou observação sobre esta meta"
+                    rows="3"
+                  />
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Data Alvo (Opcional)</label>
+                  <input
+                    type="date"
+                    value={financialGoalForm.targetDate}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, targetDate: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  />
+                  <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                    Quando você pretende alcançar esta meta
+                  </p>
+                </div>
+
+                <div className="flex gap-3 justify-end mt-6">
+                  <button
+                    onClick={handleCloseFinancialGoalModal}
+                    className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleSaveFinancialGoal}
+                    disabled={!financialGoalForm.name || !financialGoalForm.targetAmount}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                      "disabled:opacity-50 disabled:cursor-not-allowed"
+                    )}
+                  >
+                    {editingFinancialGoal ? 'Atualizar' : 'Criar'} Meta
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Due Date Modal */}
+        {showDueDateModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50">
+            <div className={clsx("relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 m-4 border", theme.card, theme.cardBorder)}>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className={clsx("text-xl font-semibold", theme.text)}>
+                  {editingDueDate ? 'Editar Vencimento' : 'Adicionar Vencimento'}
+                </h2>
+                <button 
+                  onClick={() => {
+                    setShowDueDateModal(false);
+                    setEditingDueDate(null);
+                  }}
+                  className={clsx("text-lg hover:opacity-70 transition-opacity", theme.textMuted)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Nome *</label>
+                  <input
+                    type="text"
+                    value={dueDateForm.name}
+                    onChange={(e) => setDueDateForm({ ...dueDateForm, name: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="Ex: Aluguel, Conta de Luz, etc."
+                  />
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Tipo</label>
+                  <select
+                    value={dueDateForm.type}
+                    onChange={(e) => setDueDateForm({ ...dueDateForm, type: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  >
+                    <option value="custom">Personalizado</option>
+                    <option value="bill">Conta</option>
+                    <option value="loan">Empréstimo</option>
+                    <option value="subscription">Assinatura</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={dueDateForm.amount}
+                    onChange={(e) => setDueDateForm({ ...dueDateForm, amount: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="0.00"
+                  />
+                </div>
+
+                <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Dia do Vencimento *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={dueDateForm.due_day}
+                    onChange={(e) => setDueDateForm({ ...dueDateForm, due_day: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                    placeholder="1-31"
+                  />
+                </div>
+
+                <div className="flex gap-3 justify-end mt-6">
+                  <button
+                    onClick={() => {
+                      setShowDueDateModal(false);
+                      setEditingDueDate(null);
+                    }}
+                    className={clsx("px-4 py-2 rounded-lg font-medium transition-all", theme.cardBorder, theme.textMuted, "hover:opacity-70")}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleSaveDueDate}
+                    disabled={!dueDateForm.name || !dueDateForm.due_day}
+                    className={clsx(
+                      "px-4 py-2 rounded-lg font-medium transition-all",
+                      "bg-[#00D4FF] text-white hover:bg-[#00D4FF]/80",
+                      "disabled:opacity-50 disabled:cursor-not-allowed"
+                    )}
+                  >
+                    {editingDueDate ? 'Atualizar' : 'Criar'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }
@@ -2596,8 +4049,10 @@ function shouldIgnorePayment(tx, allTransactions, creditCardBills = []) {
     }
   }
   
-  // Comparar com TODAS as faturas anteriores que correspondem a este cartão
-  // Verificar se o valor da entrada corresponde a alguma fatura anterior
+  // Comparar com TODAS as faturas (anteriores e futuras) que correspondem a este cartão
+  // Verificar se o valor da entrada corresponde a alguma fatura
+  // IMPORTANTE: Se o pagamento corresponde ao valor de uma fatura do mês seguinte,
+  // deve ser ignorado pois é pagamento antecipado da fatura futura
   const tolerance = 0.01;
   const txAmount = Math.abs(tx.amount);
   
@@ -2622,6 +4077,25 @@ function shouldIgnorePayment(tx, allTransactions, creditCardBills = []) {
             if (txDate <= dueDate) {
               return true;
             }
+            // Se a transação é posterior à data de vencimento mas o valor corresponde exatamente,
+            // pode ser pagamento antecipado da fatura do mês seguinte
+            // Verificar se a fatura vence no mês seguinte ao da transação
+            const txMonth = txDate.getMonth() + 1;
+            const txYear = txDate.getFullYear();
+            const dueMonth = dueDate.getMonth() + 1;
+            const dueYear = dueDate.getFullYear();
+            
+            // Se a fatura vence no mês seguinte ao da transação, é pagamento antecipado
+            let expectedDueMonth = txMonth + 1;
+            let expectedDueYear = txYear;
+            if (expectedDueMonth > 12) {
+              expectedDueMonth = 1;
+              expectedDueYear = txYear + 1;
+            }
+            
+            if (dueMonth === expectedDueMonth && dueYear === expectedDueYear) {
+              return true; // Pagamento antecipado da fatura do mês seguinte
+            }
           } else {
             // Se não tem data mas o valor corresponde, assumir que é fatura anterior
             return true;
@@ -2629,12 +4103,31 @@ function shouldIgnorePayment(tx, allTransactions, creditCardBills = []) {
         }
         
         // Se a fatura está aberta mas o valor corresponde exatamente
-        // Verificar se a data da transação é anterior à data de vencimento
         if (bill.isOpen === true && bill.dueDate) {
           const dueDate = new Date(bill.dueDate);
           // Se pagou antes do vencimento, é pagamento de fatura anterior
           if (txDate < dueDate) {
             return true;
+          }
+          
+          // Se pagou depois do vencimento mas o valor corresponde, verificar se é fatura do mês seguinte
+          // A fatura do mês X vence no mês X+1
+          // Se estou pagando no mês X e o valor corresponde à fatura que vence no mês X+1, é pagamento antecipado
+          const txMonth = txDate.getMonth() + 1;
+          const txYear = txDate.getFullYear();
+          const dueMonth = dueDate.getMonth() + 1;
+          const dueYear = dueDate.getFullYear();
+          
+          // Se a fatura vence no mês seguinte ao da transação, é pagamento antecipado
+          let expectedDueMonth = txMonth + 1;
+          let expectedDueYear = txYear;
+          if (expectedDueMonth > 12) {
+            expectedDueMonth = 1;
+            expectedDueYear = txYear + 1;
+          }
+          
+          if (dueMonth === expectedDueMonth && dueYear === expectedDueYear) {
+            return true; // Pagamento antecipado da fatura do mês seguinte
           }
         }
       }
@@ -2646,10 +4139,17 @@ function shouldIgnorePayment(tx, allTransactions, creditCardBills = []) {
 
 // Transaction Table Component
 function TransactionTable({ transactions, title, formatCurrency, formatDate, editingCategory, setEditingCategory, newCategory, setNewCategory, handleUpdateCategory, theme = {}, darkMode = true, creditCardBills = [] }) {
-  // Calcular totais, excluindo pagamentos de faturas anteriores
+  // Calcular totais, excluindo apenas transações com categoria "Fatura Anterior" nos cartões
   const totals = useMemo(() => {
-    // Filtrar transações que devem ser ignoradas no resumo
-    const filteredTransactions = transactions.filter(tx => !shouldIgnorePayment(tx, transactions, creditCardBills));
+    // Para cartões de crédito, excluir APENAS transações com categoria exata "Fatura Anterior"
+    // Pagamentos do mês atual devem ser considerados normalmente
+    let filteredTransactions = transactions;
+    
+    if (title === 'Cartão de Crédito' || title.includes('Cartão')) {
+      filteredTransactions = transactions.filter(tx => 
+        tx.category !== 'Fatura Anterior'
+      );
+    }
     
     const entradas = filteredTransactions.filter(tx => tx.amount > 0);
     const saidas = filteredTransactions.filter(tx => tx.amount < 0);
@@ -2659,8 +4159,11 @@ function TransactionTable({ transactions, title, formatCurrency, formatDate, edi
     // Calcular total: entradas - saídas
     const total = totalEntradas - totalSaidas;
     
-    // Contar também as transações ignoradas para informação
-    const ignoredPayments = transactions.filter(tx => shouldIgnorePayment(tx, transactions, creditCardBills));
+    // Contar transações com "Fatura Anterior" que foram desconsideradas
+    const ignoredFaturaAnterior = transactions.filter(tx => 
+      (title === 'Cartão de Crédito' || title.includes('Cartão')) && 
+      tx.category === 'Fatura Anterior'
+    );
     
     return {
       numEntradas: entradas.length,
@@ -2668,10 +4171,10 @@ function TransactionTable({ transactions, title, formatCurrency, formatDate, edi
       totalEntradas,
       totalSaidas,
       total,
-      ignoredCount: ignoredPayments.length,
-      ignoredAmount: ignoredPayments.reduce((sum, tx) => sum + tx.amount, 0)
+      ignoredCount: ignoredFaturaAnterior.length,
+      ignoredAmount: ignoredFaturaAnterior.reduce((sum, tx) => sum + tx.amount, 0)
     };
-  }, [transactions, creditCardBills]);
+  }, [transactions, title]);
 
   // Função para exportar CSV
   const exportToCSV = () => {

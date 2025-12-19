@@ -12,7 +12,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(cors());
+// Configurar CORS para aceitar flux.local e localhost
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://flux.local:5173', 'http://127.0.0.1:5173'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Função para obter o caminho do banco
@@ -134,6 +138,79 @@ function getDB() {
         amount REAL NOT NULL,
         end_date TEXT,
         payment_method TEXT NOT NULL,
+        is_paid INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS validation_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        expense_name TEXT NOT NULL,
+        recipient_names TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(expense_name)
+      );
+
+      CREATE TABLE IF NOT EXISTS expected_expense_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        expense_id INTEGER NOT NULL,
+        period TEXT NOT NULL,
+        is_paid INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(expense_id, period),
+        FOREIGN KEY (expense_id) REFERENCES expected_expenses(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS financial_goals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'custom',
+        target_amount REAL NOT NULL,
+        current_amount REAL DEFAULT 0,
+        description TEXT,
+        target_date TEXT,
+        is_completed INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS recurring_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        description_pattern TEXT NOT NULL,
+        category TEXT,
+        average_amount REAL NOT NULL,
+        frequency TEXT NOT NULL DEFAULT 'monthly',
+        last_amount REAL,
+        last_date TEXT,
+        transaction_count INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1,
+        alert_threshold REAL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(description_pattern)
+      );
+
+      CREATE TABLE IF NOT EXISTS recurring_transaction_matches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recurring_transaction_id INTEGER NOT NULL,
+        transaction_id INTEGER NOT NULL,
+        matched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (recurring_transaction_id) REFERENCES recurring_transactions(id) ON DELETE CASCADE,
+        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+        UNIQUE(transaction_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS due_dates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL,
+        due_day INTEGER NOT NULL,
+        source_type TEXT,
+        source_id INTEGER,
+        is_active INTEGER DEFAULT 1,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
@@ -142,7 +219,29 @@ function getDB() {
       CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
       CREATE INDEX IF NOT EXISTS idx_transactions_provider_id ON transactions(provider_id);
       CREATE INDEX IF NOT EXISTS idx_pluggy_items_item_id ON pluggy_items(item_id);
+      CREATE INDEX IF NOT EXISTS idx_recurring_transactions_pattern ON recurring_transactions(description_pattern);
+      CREATE INDEX IF NOT EXISTS idx_due_dates_due_day ON due_dates(due_day);
     `);
+
+      // Migração: adicionar coluna is_paid à tabela expected_expenses se não existir
+      try {
+        const expectedExpensesTableInfo = db.prepare("PRAGMA table_info(expected_expenses)").all();
+        const expectedExpensesColumnNames = expectedExpensesTableInfo.map(col => col.name);
+        
+        if (!expectedExpensesColumnNames.includes('is_paid')) {
+          db.prepare("ALTER TABLE expected_expenses ADD COLUMN is_paid INTEGER DEFAULT 0").run();
+          console.log('[DB] Coluna is_paid adicionada à tabela expected_expenses');
+        }
+      } catch (e) {
+        console.log('[DB] Tabela expected_expenses ainda não existe, será criada na próxima execução');
+      }
+
+      // Criar tabela expected_expense_payments se não existir (migration)
+      try {
+        db.prepare('SELECT * FROM expected_expense_payments LIMIT 1').get();
+      } catch (e) {
+        // Tabela não existe, será criada pelo CREATE TABLE acima
+      }
 
       // Migração: adicionar novas colunas à tabela loans se não existirem
       try {
@@ -221,6 +320,8 @@ function getDB() {
       ['Localiza', 'Transporte'],
       ['Drogasil', 'Farmácia'],
       ['Droga Raia', 'Farmácia'],
+      ['Raia Drogasil', 'Farmácia'],
+      ['Raia', 'Farmácia'],
       ['Farmácia', 'Farmácia'],
       ['Coraci', 'Moradia'],
     ];
@@ -266,9 +367,19 @@ const CATEGORY_RULES = {
     keywords: ['legumes', 'legume', 'feira', 'feirante', 'hortifrutigranjeiro', 'horta', 'orgânico', 'organico', 'verdura', 'fruta', 'produtor', 'agricultor']
   },
   
-  // FARMÁCIA
+  // FARMÁCIA - Lista expandida com todas as variações possíveis
   farmacia: {
-    keywords: ['farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'drogasil', 'droga', 'drogas', 'pague menos', 'ultrafarma', 'panvel', 'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao', 'farmácia e drogaria', 'farmacia e drogaria', 'droga raia raia', 'raia drogas', 'drogasil drogasil', 'raia drogasil', 'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo', 'farmácia nossa senhora', 'farmacia nossa senhora', 'farmácia nossa', 'farmacia nossa', 'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central', 'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas']
+    keywords: [
+      'farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'raia drogasil', 'raia drogas', 
+      'drogasil', 'droga', 'drogas', 'pague menos', 'ultrafarma', 'panvel', 
+      'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao', 
+      'farmácia e drogaria', 'farmacia e drogaria', 'droga raia raia', 'drogasil drogasil', 
+      'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo', 
+      'farmácia nossa senhora', 'farmacia nossa senhora', 'farmácia nossa', 'farmacia nossa', 
+      'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central', 
+      'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas',
+      'farmácia e drogaria raia', 'farmacia e drogaria raia', 'drogaria raia', 'drogaria drogasil'
+    ]
   },
   
   // SAÚDE
@@ -336,16 +447,46 @@ function categorize(description, amount = 0, date = null) {
   
   // 0.1. Verificação especial: Farmácias devem ir para Farmácia (ANTES de verificar Moradia)
   // Isso evita que "Raia Drogasil", "Droga Raia" sejam categorizadas como Moradia
-  // Verificar palavras-chave de farmácia de forma mais abrangente
+  // IMPORTANTE: Esta verificação deve ser a PRIMEIRA e mais específica possível
+  
+  // Normalizar a descrição para facilitar comparações
+  const normalizedDesc = descriptionLower.trim();
+  
+  // Lista completa de palavras-chave de farmácia (mais específicas primeiro)
+  // Inclui todas as variações possíveis de farmácias e drogarias
   const farmaciaKeywords = [
-    'raia', 'drogasil', 'droga raia', 'drogaria', 'farmácia', 'farmacia', 
-    'pague menos', 'ultrafarma', 'panvel', 'droga', 'drogas', 'raia drogasil',
-    'raia drogas', 'droga raia raia', 'drogasil drogasil', 'farmácia popular',
-    'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao',
-    'farmácia e drogaria', 'farmacia e drogaria'
+    'raia drogasil', 'raia drogas', 'droga raia', 'drogasil', 'drogaria',
+    'farmácia', 'farmacia', 'pague menos', 'ultrafarma', 'panvel',
+    'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 
+    'farmacia de manipulacao', 'farmácia e drogaria', 'farmacia e drogaria',
+    'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo',
+    'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas',
+    'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central',
+    'farmácia nossa', 'farmacia nossa', 'farmácia nossa senhora', 'farmacia nossa senhora'
   ];
-  // Verificar se a descrição contém qualquer palavra-chave de farmácia
-  if (farmaciaKeywords.some(keyword => descriptionLower.includes(keyword.toLowerCase()))) {
+  
+  // Verificar keywords específicas primeiro (mais confiável)
+  for (const keyword of farmaciaKeywords) {
+    if (normalizedDesc.includes(keyword.toLowerCase())) {
+      return 'Farmácia';
+    }
+  }
+  
+  // Verificar palavras isoladas com exceções (menos específico, mas necessário)
+  const hasRaia = normalizedDesc.includes('raia');
+  const hasDroga = normalizedDesc.includes('droga') || normalizedDesc.includes('drogas');
+  const hasPraia = normalizedDesc.includes('praia');
+  const hasCombustivel = normalizedDesc.includes('combustivel') || normalizedDesc.includes('combustível');
+  
+  // Se contém "raia" mas não "praia", é farmácia
+  // Isso captura "Raia Drogasil" mesmo que não esteja na lista específica
+  if (hasRaia && !hasPraia) {
+    return 'Farmácia';
+  }
+  
+  // Se contém "droga" ou "drogas" mas não "combustível", é farmácia
+  // Isso captura qualquer drogaria mesmo que não esteja na lista específica
+  if (hasDroga && !hasCombustivel) {
     return 'Farmácia';
   }
   
@@ -487,10 +628,33 @@ async function syncTransactions(transactions, accountId, accountInfo = {}) {
       
       // Verificar duplicata antes de inserir (mesma data, valor, descrição, banco e pessoa)
       // Usar data normalizada e valor normalizado para comparação mais robusta
-      const duplicate = checkDuplicate.get(normalizedDate, normalizedAmount, txDescription, bankName, ownerName);
+      // IMPORTANTE: Usar provider_id como verificação principal, pois é único
+      const checkByProviderId = database.prepare('SELECT id FROM transactions WHERE provider_id = ? LIMIT 1');
+      const existingByProviderId = checkByProviderId.get(providerId);
+      
+      if (existingByProviderId) {
+        // Transação já existe pelo provider_id (mais confiável)
+        skipped++;
+        continue;
+      }
+      
+      // Verificação adicional por data, valor, descrição (menos restritiva)
+      // Normalizar descrição removendo espaços extras e convertendo para maiúsculas para comparação
+      const normalizedDescription = txDescription.trim().toUpperCase().replace(/\s+/g, ' ');
+      const checkByDetails = database.prepare(`
+        SELECT id FROM transactions 
+        WHERE DATE(date) = DATE(?) 
+          AND ROUND(amount, 2) = ROUND(?, 2)
+          AND UPPER(TRIM(REPLACE(description, '  ', ' '))) = ?
+          AND bank_name = ? 
+          AND owner_name = ?
+          AND source = 'pluggy'
+        LIMIT 1
+      `);
+      const duplicate = checkByDetails.get(normalizedDate, normalizedAmount, normalizedDescription, bankName, ownerName);
       
       if (duplicate) {
-        // Transação já existe, pular
+        // Transação já existe pelos detalhes, pular
         skipped++;
         continue;
       }
@@ -519,7 +683,10 @@ async function syncTransactions(transactions, accountId, accountInfo = {}) {
       }
     }
     if (skipped > 0) {
-      console.log(`[SYNC] ${skipped} transações duplicadas ignoradas`);
+      console.log(`[SYNC] ${skipped} transações duplicadas ignoradas (já existiam no banco)`);
+    }
+    if (count > 0) {
+      console.log(`[SYNC] ✅ ${count} transações NOVAS inseridas no banco`);
     }
     return count;
   });
@@ -652,22 +819,67 @@ function getAvailablePeriods() {
   const periods = [{ label: 'Tudo', value: 'all' }];
   const now = new Date();
   const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const allPeriods = [];
   
-  // Gerar últimos 12 meses
-  for (let i = 0; i < 12; i++) {
+  // Gerar últimos 12 meses (passados)
+  for (let i = 12; i >= 1; i--) {
     const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const year = date.getFullYear();
     const monthIndex = date.getMonth(); // 0-indexed
     const monthNumber = monthIndex + 1; // 1-indexed para o value e getCyclePeriod
     const cycle = getCyclePeriod(year, monthNumber);
     
-    periods.push({
+    allPeriods.push({
       label: `${months[monthIndex]}/${year}`,
       value: `${year}-${String(monthNumber).padStart(2, '0')}`,
       start: cycle.start,
       end: cycle.end,
+      date: date,
     });
   }
+  
+  // Gerar mês atual
+  const currentYear = now.getFullYear();
+  const currentMonthIndex = now.getMonth(); // 0-indexed
+  const currentMonthNumber = currentMonthIndex + 1; // 1-indexed
+  const currentCycle = getCyclePeriod(currentYear, currentMonthNumber);
+  const currentDate = new Date(currentYear, currentMonthIndex, 1);
+  
+  allPeriods.push({
+    label: `${months[currentMonthIndex]}/${currentYear}`,
+    value: `${currentYear}-${String(currentMonthNumber).padStart(2, '0')}`,
+    start: currentCycle.start,
+    end: currentCycle.end,
+    date: currentDate,
+  });
+  
+  // Gerar próximos 12 meses (futuros)
+  for (let i = 1; i <= 12; i++) {
+    const date = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const year = date.getFullYear();
+    const monthIndex = date.getMonth(); // 0-indexed
+    const monthNumber = monthIndex + 1; // 1-indexed para o value e getCyclePeriod
+    const cycle = getCyclePeriod(year, monthNumber);
+    
+    allPeriods.push({
+      label: `${months[monthIndex]}/${year}`,
+      value: `${year}-${String(monthNumber).padStart(2, '0')}`,
+      start: cycle.start,
+      end: cycle.end,
+      date: date,
+    });
+  }
+  
+  // Ordenar por data (mais antigo primeiro)
+  allPeriods.sort((a, b) => a.date - b.date);
+  
+  // Adicionar ao array de períodos
+  periods.push(...allPeriods.map(p => ({
+    label: p.label,
+    value: p.value,
+    start: p.start,
+    end: p.end,
+  })));
   
   return periods;
 }
@@ -802,12 +1014,16 @@ function getDashboardData(filters = {}) {
     
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
     
+    // Buscar transações sem limite quando não há filtro de período específico
+    // ou aumentar o limite para garantir que transações recentes apareçam
+    const limit = period && period !== 'all' ? 1000 : 2000; // Aumentar limite para incluir mais transações
+    
     const transactions = database.prepare(`
       SELECT * FROM transactions 
       ${whereClause}
       ORDER BY date DESC 
-      LIMIT 500
-    `).all(...params);
+      LIMIT ?
+    `).all(...params, limit);
 
     // Totais por categoria com filtros
     // IMPORTANTE: Apenas gastos (amount < 0) de conta corrente - NUNCA incluir cartão de crédito
@@ -1095,16 +1311,20 @@ function getDashboardData(filters = {}) {
         `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
         totalGastos += gastosCard?.total || 0;
         
-        // Calcular fatura do período ANTERIOR para este cartão
+        // Calcular APENAS a última fatura fechada (mês anterior) para este cartão
+        let lastClosedBill = null;
+        
+        // Calcular fatura do mês anterior
         let prevYear = year;
         let prevMonth = month - 1;
-        if (prevMonth === 0) {
-          prevMonth = 12;
-          prevYear = year - 1;
+        while (prevMonth <= 0) {
+          prevMonth += 12;
+          prevYear -= 1;
         }
+        
         const prevCardCycle = getCardCyclePeriod(prevYear, prevMonth, card.bank_name, card.owner_name);
         
-        // Calcular fatura anterior: gastos - créditos do período anterior
+        // Calcular fatura do período anterior: gastos - créditos
         const prevGastos = database.prepare(`
           SELECT SUM(ABS(amount)) as total FROM transactions 
           WHERE account_type = 'CREDIT' 
@@ -1127,48 +1347,22 @@ function getDashboardData(filters = {}) {
         `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
         
         const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
-        
-        // Calcular primeiro dia útil do mês atual para excluir pagamentos nesse dia
-        const firstBusinessDay = getFirstBusinessDay(year, month);
-        const firstBusinessDayStr = `${year}-${String(month).padStart(2, '0')}-${String(firstBusinessDay).padStart(2, '0')}`;
-        
-        // Para Larissa, também excluir pagamentos no dia de fechamento da fatura
-        let closingDayStr = null;
-        if (card.owner_name === 'Larissa Purkot') {
-          let cycleEndDay;
-          if (card.bank_name === 'Itaú') {
-            cycleEndDay = 26; // Itaú Larissa fecha dia 26
-          } else if (card.bank_name === 'Nubank') {
-            cycleEndDay = 26; // Nubank Larissa fecha dia 26
-          }
-          if (cycleEndDay) {
-            closingDayStr = `${year}-${String(month).padStart(2, '0')}-${String(cycleEndDay).padStart(2, '0')}`;
-          }
-        }
-        
-        // Construir condições de exclusão
-        let excludeConditions = [];
-        let excludeParams = [];
-        
-        // Sempre excluir primeiro dia útil
-        excludeConditions.push('NOT (date >= ? AND date < ?)');
-        excludeParams.push(firstBusinessDayStr + 'T00:00:00', firstBusinessDayStr + 'T23:59:59');
-        
-        // Para Larissa, também excluir dia de fechamento
-        if (closingDayStr) {
-          excludeConditions.push('NOT (date >= ? AND date < ?)');
-          excludeParams.push(closingDayStr + 'T00:00:00', closingDayStr + 'T23:59:59');
-        }
-        
-        // Excluir pagamentos que correspondem à fatura anterior
         if (prevBillAmount > 0) {
-          const minAmount = prevBillAmount - tolerance;
-          const maxAmount = prevBillAmount + tolerance;
-          excludeConditions.push('NOT (ABS(amount) >= ? AND ABS(amount) <= ?)');
-          excludeParams.push(minAmount, maxAmount);
+          lastClosedBill = {
+            amount: prevBillAmount,
+            period: `${prevYear}-${String(prevMonth).padStart(2, '0')}`
+          };
         }
         
-        // Buscar TODOS os créditos do período para verificar múltiplos pagamentos
+        if (lastClosedBill) {
+          console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name}: Última fatura fechada: R$ ${lastClosedBill.amount.toFixed(2)} (${lastClosedBill.period})`);
+        } else {
+          console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name}: Nenhuma fatura fechada anterior encontrada`);
+        }
+        
+        const previousBills = lastClosedBill ? [lastClosedBill] : [];
+        
+        // Buscar TODOS os créditos do período
         const allCreditos = database.prepare(`
           SELECT date, amount, description
           FROM transactions 
@@ -1182,64 +1376,87 @@ function getDashboardData(filters = {}) {
           ORDER BY date ASC
         `).all(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
         
-        // Filtrar créditos que devem ser excluídos
+        // Contar créditos, ignorando apenas os que correspondem EXATAMENTE a faturas fechadas anteriores
+        // Verificar tanto pagamentos únicos quanto sequências de pagamentos que somam uma fatura anterior
         let creditosToCount = 0;
-        let runningSum = 0; // Para verificar múltiplos pagamentos que somam a fatura
-        for (const credito of allCreditos) {
-          const creditoDate = new Date(credito.date);
-          const creditoDay = creditoDate.getDate();
+        const tolerance = 0.01; // Tolerância de 1 centavo para comparação
+        const processedCredits = []; // Para rastrear quais créditos já foram processados
+        
+        // Primeiro, verificar pagamentos únicos que correspondem a faturas anteriores
+        for (let i = 0; i < allCreditos.length; i++) {
+          if (processedCredits.includes(i)) continue;
+          
+          const credito = allCreditos[i];
           const creditoAmount = Math.abs(credito.amount);
           
-          // Verificar se está no primeiro dia útil
-          if (creditoDay === firstBusinessDay) {
-            continue; // Ignorar
-          }
-          
-          // Verificar se está no dia de fechamento (para Larissa)
-          if (closingDayStr && credito.date >= closingDayStr + 'T00:00:00' && credito.date < closingDayStr + 'T23:59:59') {
-            continue; // Ignorar
-          }
-          
-          // Verificar se corresponde à fatura anterior (pagamento único)
-          if (prevBillAmount > 0) {
-            const minAmount = prevBillAmount - tolerance;
-            const maxAmount = prevBillAmount + tolerance;
+          // Verificar se corresponde EXATAMENTE a alguma fatura fechada anterior
+          for (const bill of previousBills) {
+            const minAmount = bill.amount - tolerance;
+            const maxAmount = bill.amount + tolerance;
             
-            // Verificar pagamento único
+            // Se o valor corresponde exatamente a uma fatura fechada anterior, ignorar
             if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
-              continue; // Ignorar - corresponde à fatura anterior
+              console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name}: Ignorando pagamento único de R$ ${creditoAmount.toFixed(2)} (corresponde à fatura fechada ${bill.period}: R$ ${bill.amount.toFixed(2)})`);
+              processedCredits.push(i);
+              break;
             }
-            
-            // Verificar se múltiplos pagamentos somam o valor da fatura anterior
-            runningSum += creditoAmount;
-            if (runningSum >= minAmount && runningSum <= maxAmount) {
-              // Se a soma atual corresponde à fatura, ignorar este e os anteriores
-              creditosToCount = 0; // Resetar contagem
-              runningSum = 0;
-              continue;
-            } else if (runningSum > maxAmount) {
-              // Se ultrapassou, resetar e contar apenas o excedente
-              const excess = runningSum - maxAmount;
-              creditosToCount = excess;
-              runningSum = excess;
-            }
-            // Se ainda não chegou no valor da fatura, NÃO contar ainda (pode ser parte do pagamento)
-          } else {
-            // Se não há fatura anterior, contar normalmente
-            creditosToCount += credito.amount;
           }
         }
         
-        // Se ainda há runningSum acumulado mas não correspondeu à fatura, adicionar
-        if (prevBillAmount > 0 && runningSum > 0 && runningSum < (prevBillAmount - tolerance)) {
-          creditosToCount += runningSum;
+        // Agora verificar sequências de pagamentos que somam faturas anteriores
+        if (previousBills.length > 0) {
+          for (const bill of previousBills) {
+            const minAmount = bill.amount - tolerance;
+            const maxAmount = bill.amount + tolerance;
+            
+            // Tentar encontrar sequências de pagamentos que somam esta fatura
+            let sequence = [];
+            let sequenceSum = 0;
+            
+            for (let i = 0; i < allCreditos.length; i++) {
+              if (processedCredits.includes(i)) continue; // Já processado
+              
+              const credito = allCreditos[i];
+              const creditoAmount = Math.abs(credito.amount);
+              
+              // Adicionar à sequência
+              sequence.push(i);
+              sequenceSum += creditoAmount;
+              
+              // Verificar se a sequência corresponde à fatura
+              if (sequenceSum >= minAmount && sequenceSum <= maxAmount) {
+                // Encontrou sequência que corresponde - marcar todos como processados
+                console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name}: Ignorando sequência de ${sequence.length} pagamento(s) que soma R$ ${sequenceSum.toFixed(2)} (fatura fechada ${bill.period}: R$ ${bill.amount.toFixed(2)})`);
+                processedCredits.push(...sequence);
+                sequence = [];
+                sequenceSum = 0;
+                break; // Fatura já foi coberta, passar para próxima
+              } else if (sequenceSum > maxAmount) {
+                // Ultrapassou - resetar sequência e continuar
+                sequence = [];
+                sequenceSum = 0;
+              }
+            }
+          }
         }
+        
+        // Contar apenas os créditos que não foram processados (não correspondem a faturas anteriores)
+        for (let i = 0; i < allCreditos.length; i++) {
+          if (!processedCredits.includes(i)) {
+            creditosToCount += allCreditos[i].amount;
+          }
+        }
+        
+        const lastBillAmount = lastClosedBill ? lastClosedBill.amount : 0;
+        console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name}: Créditos contados = R$ ${creditosToCount.toFixed(2)} (de ${allCreditos.length} créditos totais, última fatura fechada: R$ ${lastBillAmount.toFixed(2)})`);
         
         totalCreditos += creditosToCount;
       }
       
       // Fatura total = Gastos - Créditos (excluindo pagamentos de fatura anterior)
       creditCardBill = totalGastos - totalCreditos;
+      console.log(`[DASHBOARD] Período ${year}-${String(month).padStart(2, '0')}: Fatura total = R$ ${totalGastos.toFixed(2)} (gastos) - R$ ${totalCreditos.toFixed(2)} (créditos) = R$ ${creditCardBill.toFixed(2)}`);
+      console.log(`[DASHBOARD] Fatura total calculada: R$ ${totalGastos.toFixed(2)} (gastos) - R$ ${totalCreditos.toFixed(2)} (créditos) = R$ ${creditCardBill.toFixed(2)}`);
     } else {
       // Período atual
       const now = new Date();
@@ -1257,7 +1474,6 @@ function getDashboardData(filters = {}) {
       
       let totalGastos = 0;
       let totalCreditos = 0;
-      const tolerance = 0.01;
       
       for (const card of uniqueCards) {
         const cardCycle = getCardCyclePeriod(currentYear, currentMonth, card.bank_name, card.owner_name);
@@ -1274,15 +1490,20 @@ function getDashboardData(filters = {}) {
         `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
         totalGastos += gastosCard?.total || 0;
         
-        // Calcular fatura do período ANTERIOR
+        // Calcular APENAS a última fatura fechada (mês anterior) para este cartão
+        let lastClosedBill = null;
+        
+        // Calcular fatura do mês anterior
         let prevYear = currentYear;
         let prevMonth = currentMonth - 1;
-        if (prevMonth === 0) {
-          prevMonth = 12;
-          prevYear = currentYear - 1;
+        while (prevMonth <= 0) {
+          prevMonth += 12;
+          prevYear -= 1;
         }
+        
         const prevCardCycle = getCardCyclePeriod(prevYear, prevMonth, card.bank_name, card.owner_name);
         
+        // Calcular fatura do período anterior: gastos - créditos
         const prevGastos = database.prepare(`
           SELECT SUM(ABS(amount)) as total FROM transactions 
           WHERE account_type = 'CREDIT' 
@@ -1304,27 +1525,23 @@ function getDashboardData(filters = {}) {
             AND date <= ?
         `).get(card.bank_name, card.owner_name, prevCardCycle.start, prevCardCycle.end);
         
-        const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
-        
-        // Calcular primeiro dia útil do mês atual para excluir pagamentos nesse dia
-        const firstBusinessDay = getFirstBusinessDay(currentYear, currentMonth);
-        const firstBusinessDayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(firstBusinessDay).padStart(2, '0')}`;
-        
-        // Para Larissa, também excluir pagamentos no dia de fechamento da fatura
-        let closingDayStr = null;
-        if (card.owner_name === 'Larissa Purkot') {
-          let cycleEndDay;
-          if (card.bank_name === 'Itaú') {
-            cycleEndDay = 26; // Itaú Larissa fecha dia 26
-          } else if (card.bank_name === 'Nubank') {
-            cycleEndDay = 26; // Nubank Larissa fecha dia 26
-          }
-          if (cycleEndDay) {
-            closingDayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(cycleEndDay).padStart(2, '0')}`;
-          }
+        const prevBillAmountCurrent = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
+        if (prevBillAmountCurrent > 0) {
+          lastClosedBill = {
+            amount: prevBillAmountCurrent,
+            period: `${prevYear}-${String(prevMonth).padStart(2, '0')}`
+          };
         }
         
-        // Buscar TODOS os créditos do período para verificar múltiplos pagamentos
+        if (lastClosedBill) {
+          console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name} (atual): Última fatura fechada: R$ ${lastClosedBill.amount.toFixed(2)} (${lastClosedBill.period})`);
+        } else {
+          console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name} (atual): Nenhuma fatura fechada anterior encontrada`);
+        }
+        
+        const previousBills = lastClosedBill ? [lastClosedBill] : [];
+        
+        // Buscar TODOS os créditos do período
         const allCreditos = database.prepare(`
           SELECT date, amount, description
           FROM transactions 
@@ -1338,62 +1555,85 @@ function getDashboardData(filters = {}) {
           ORDER BY date ASC
         `).all(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
         
-        // Filtrar créditos que devem ser excluídos
+        // Contar créditos, ignorando apenas os que correspondem EXATAMENTE a faturas fechadas anteriores
+        // Verificar tanto pagamentos únicos quanto sequências de pagamentos que somam uma fatura anterior
         let creditosToCount = 0;
-        let runningSum = 0; // Para verificar múltiplos pagamentos que somam a fatura
+        const tolerance = 0.01; // Tolerância de 1 centavo para comparação
+        const processedCredits = []; // Para rastrear quais créditos já foram processados
         
-        for (const credito of allCreditos) {
-          const creditoDate = new Date(credito.date);
-          const creditoDay = creditoDate.getDate();
+        // Primeiro, verificar pagamentos únicos que correspondem a faturas anteriores
+        for (let i = 0; i < allCreditos.length; i++) {
+          if (processedCredits.includes(i)) continue;
+          
+          const credito = allCreditos[i];
           const creditoAmount = Math.abs(credito.amount);
           
-          // Verificar se está no primeiro dia útil
-          if (creditoDay === firstBusinessDay) {
-            continue; // Ignorar
-          }
-          
-          // Verificar se está no dia de fechamento (para Larissa)
-          if (closingDayStr && credito.date >= closingDayStr + 'T00:00:00' && credito.date < closingDayStr + 'T23:59:59') {
-            continue; // Ignorar
-          }
-          
-          // Verificar se corresponde à fatura anterior (pagamento único)
-          if (prevBillAmount > 0) {
-            const minAmount = prevBillAmount - tolerance;
-            const maxAmount = prevBillAmount + tolerance;
-            if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
-              continue; // Ignorar - corresponde à fatura anterior
-            }
+          // Verificar se corresponde EXATAMENTE a alguma fatura fechada anterior
+          for (const bill of previousBills) {
+            const minAmount = bill.amount - tolerance;
+            const maxAmount = bill.amount + tolerance;
             
-            // Verificar se múltiplos pagamentos somam o valor da fatura anterior
-            runningSum += creditoAmount;
-            if (runningSum >= minAmount && runningSum <= maxAmount) {
-              // Se a soma atual corresponde à fatura, ignorar este e os anteriores
-              creditosToCount = 0; // Resetar contagem
-              runningSum = 0;
-              continue;
-            } else if (runningSum > maxAmount) {
-              // Se ultrapassou, resetar e contar apenas o excedente
-              const excess = runningSum - maxAmount;
-              creditosToCount = excess;
-              runningSum = excess;
+            // Se o valor corresponde exatamente a uma fatura fechada anterior, ignorar
+            if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
+              console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name} (atual): Ignorando pagamento único de R$ ${creditoAmount.toFixed(2)} (corresponde à fatura fechada ${bill.period}: R$ ${bill.amount.toFixed(2)})`);
+              processedCredits.push(i);
+              break;
             }
-            // Se ainda não chegou no valor da fatura, NÃO contar ainda (pode ser parte do pagamento)
-          } else {
-            // Se não há fatura anterior, contar normalmente
-            creditosToCount += credito.amount;
           }
         }
         
-        // Se ainda há runningSum acumulado mas não correspondeu à fatura, adicionar
-        if (prevBillAmount > 0 && runningSum > 0 && runningSum < (prevBillAmount - tolerance)) {
-          creditosToCount += runningSum;
+        // Agora verificar sequências de pagamentos que somam faturas anteriores
+        if (previousBills.length > 0) {
+          for (const bill of previousBills) {
+            const minAmount = bill.amount - tolerance;
+            const maxAmount = bill.amount + tolerance;
+            
+            // Tentar encontrar sequências de pagamentos que somam esta fatura
+            let sequence = [];
+            let sequenceSum = 0;
+            
+            for (let i = 0; i < allCreditos.length; i++) {
+              if (processedCredits.includes(i)) continue; // Já processado
+              
+              const credito = allCreditos[i];
+              const creditoAmount = Math.abs(credito.amount);
+              
+              // Adicionar à sequência
+              sequence.push(i);
+              sequenceSum += creditoAmount;
+              
+              // Verificar se a sequência corresponde à fatura
+              if (sequenceSum >= minAmount && sequenceSum <= maxAmount) {
+                // Encontrou sequência que corresponde - marcar todos como processados
+                console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name} (atual): Ignorando sequência de ${sequence.length} pagamento(s) que soma R$ ${sequenceSum.toFixed(2)} (fatura fechada ${bill.period}: R$ ${bill.amount.toFixed(2)})`);
+                processedCredits.push(...sequence);
+                sequence = [];
+                sequenceSum = 0;
+                break; // Fatura já foi coberta, passar para próxima
+              } else if (sequenceSum > maxAmount) {
+                // Ultrapassou - resetar sequência e continuar
+                sequence = [];
+                sequenceSum = 0;
+              }
+            }
+          }
         }
+        
+        // Contar apenas os créditos que não foram processados (não correspondem a faturas anteriores)
+        for (let i = 0; i < allCreditos.length; i++) {
+          if (!processedCredits.includes(i)) {
+            creditosToCount += allCreditos[i].amount;
+          }
+        }
+        
+        const lastBillAmount = lastClosedBill ? lastClosedBill.amount : 0;
+        console.log(`[DASHBOARD] ${card.bank_name} ${card.owner_name} (atual): Créditos contados = R$ ${creditosToCount.toFixed(2)} (de ${allCreditos.length} créditos totais, última fatura fechada: R$ ${lastBillAmount.toFixed(2)})`);
         
         totalCreditos += creditosToCount;
       }
       
       creditCardBill = totalGastos - totalCreditos;
+      console.log(`[DASHBOARD] Período atual: Fatura total = R$ ${totalGastos.toFixed(2)} (gastos) - R$ ${totalCreditos.toFixed(2)} (créditos) = R$ ${creditCardBill.toFixed(2)}`);
     }
 
     return {
@@ -1717,13 +1957,41 @@ app.post('/api/pluggy/sync', async (req, res) => {
         console.log(`[SERVER] Sincronizando conta: ${account.name || account.type} (${account.id})`);
         console.log(`[SERVER] Tipo da conta: ${account.type}`);
         
-        // fetchTransactions já retorna um array diretamente (não precisa acessar .results)
-        const transactions = await pluggyClient.fetchTransactions(account.id);
+        // Buscar TODAS as transações do Pluggy (sem filtro de data)
+        // Isso garante que transações novas sejam encontradas
+        let transactions = await pluggyClient.fetchTransactions(account.id);
         
         // Garantir que é um array
         const transactionsArray = Array.isArray(transactions) ? transactions : [];
 
         console.log(`[SERVER] Transações encontradas: ${transactionsArray.length}`);
+        
+        // Log das datas das transações para debug
+        if (transactionsArray.length > 0) {
+          const dates = transactionsArray.map(tx => tx.date).filter(Boolean);
+          if (dates.length > 0) {
+            dates.sort();
+            const oldestDate = dates[0];
+            const newestDate = dates[dates.length - 1];
+            console.log(`[SERVER] Data da transação mais antiga: ${oldestDate}`);
+            console.log(`[SERVER] Data da transação mais recente: ${newestDate}`);
+            
+            // Verificar quantas transações são dos últimos 7 dias
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            const recentTransactions = transactionsArray.filter(tx => {
+              if (!tx.date) return false;
+              const txDate = new Date(tx.date);
+              return txDate >= sevenDaysAgo;
+            });
+            console.log(`[SERVER] Transações dos últimos 7 dias: ${recentTransactions.length}`);
+            
+            // Log de algumas transações recentes para debug
+            if (recentTransactions.length > 0) {
+              console.log(`[SERVER] Exemplo de transação recente: ${recentTransactions[0].date} - ${recentTransactions[0].description} - ${recentTransactions[0].amount}`);
+            }
+          }
+        }
         
         if (transactionsArray.length > 0) {
           // Determinar o tipo de conta (BANK = conta corrente, CREDIT = cartão de crédito)
@@ -1735,8 +2003,18 @@ app.post('/api/pluggy/sync', async (req, res) => {
             bankName: bankName,
             ownerName: ownerName,
           });
+          const skipped = transactionsArray.length - synced;
           totalSynced += synced;
-          console.log(`[SERVER] ✅ ${synced} transações sincronizadas da conta ${account.name || account.type} (${transactionsArray.length - synced} duplicadas ignoradas)`);
+          
+          if (synced > 0) {
+            console.log(`[SERVER] ✅ ${synced} transações NOVAS sincronizadas da conta ${account.name || account.type}`);
+          }
+          if (skipped > 0) {
+            console.log(`[SERVER] ⏭️  ${skipped} transações duplicadas ignoradas (já existiam no banco)`);
+          }
+          if (synced === 0 && skipped === 0) {
+            console.log(`[SERVER] ⚠️  Nenhuma transação foi processada (possível erro na sincronização)`);
+          }
         } else {
           console.log(`[SERVER] ℹ️ Nenhuma transação para sincronizar na conta ${account.name || account.type}`);
         }
@@ -2502,35 +2780,55 @@ app.post('/api/transactions/fix-farmacia', (req, res) => {
   try {
     const database = getDB();
     
-    // Buscar transações que contêm keywords de farmácia e NÃO estão como "Farmácia"
-    // Incluir todas as variações possíveis: raia, drogasil, droga, drogaria, etc.
+    // Buscar TODAS as transações (não apenas as que não são Farmácia)
+    // Isso garante que mesmo transações já categorizadas como Farmácia sejam revalidadas
     const transactions = database.prepare(`
-      SELECT id, description, category 
+      SELECT id, description, category, amount, date 
       FROM transactions 
-      WHERE category != 'Farmácia'
-      AND (
-        LOWER(description) LIKE '%drogasil%' 
-        OR LOWER(description) LIKE '%droga raia%' 
-        OR LOWER(description) LIKE '%raia drogasil%'
-        OR LOWER(description) LIKE '%raia drogas%'
-        OR LOWER(description) LIKE '%farmácia%' 
-        OR LOWER(description) LIKE '%farmacia%' 
-        OR LOWER(description) LIKE '%drogaria%' 
-        OR (LOWER(description) LIKE '%raia%' AND LOWER(description) NOT LIKE '%praia%')
-        OR LOWER(description) LIKE '%pague menos%' 
-        OR LOWER(description) LIKE '%ultrafarma%' 
-        OR LOWER(description) LIKE '%panvel%'
-        OR (LOWER(description) LIKE '%droga%' AND LOWER(description) NOT LIKE '%combustivel%' AND LOWER(description) NOT LIKE '%combustível%')
-      )
+      ORDER BY date DESC
     `).all();
     
     let updated = 0;
     const updateStmt = database.prepare('UPDATE transactions SET category = ? WHERE id = ?');
     
+    // Palavras-chave específicas de farmácia para busca direta
+    const farmaciaKeywords = [
+      'raia drogasil', 'raia drogas', 'droga raia', 'drogasil', 'drogaria',
+      'farmácia', 'farmacia', 'pague menos', 'ultrafarma', 'panvel'
+    ];
+    
     for (const tx of transactions) {
-      updateStmt.run('Farmácia', tx.id);
-      updated++;
-      console.log(`[FIX-FARMACIA] Atualizada transação ${tx.id}: "${tx.description}" (${tx.category}) -> Farmácia`);
+      const description = (tx.description || '').toLowerCase().trim();
+      
+      // Verificar se é farmácia usando a mesma lógica da função categorize
+      let isFarmacia = false;
+      
+      // Verificar keywords específicas
+      for (const keyword of farmaciaKeywords) {
+        if (description.includes(keyword.toLowerCase())) {
+          isFarmacia = true;
+          break;
+        }
+      }
+      
+      // Verificar "raia" (mas não "praia")
+      if (!isFarmacia && description.includes('raia') && !description.includes('praia')) {
+        isFarmacia = true;
+      }
+      
+      // Verificar "droga" ou "drogas" (mas não "combustível")
+      if (!isFarmacia && (description.includes('droga') || description.includes('drogas'))) {
+        if (!description.includes('combustivel') && !description.includes('combustível')) {
+          isFarmacia = true;
+        }
+      }
+      
+      // Se é farmácia mas a categoria atual não é Farmácia, atualizar
+      if (isFarmacia && tx.category !== 'Farmácia') {
+        updateStmt.run('Farmácia', tx.id);
+        updated++;
+        console.log(`[FIX-FARMACIA] Atualizada transação ${tx.id}: "${tx.description}" (${tx.category}) -> Farmácia`);
+      }
     }
     
     console.log(`[FIX-FARMACIA] Total de transações atualizadas: ${updated}`);
@@ -3990,11 +4288,13 @@ app.get('/api/goals', async (req, res) => {
         const robertStart = new Date(year, monthIndex - 1, 29).toISOString().split('T')[0] + 'T00:00:00';
         const robertEnd = new Date(year, monthIndex, 28, 23, 59, 59).toISOString().split('T')[0] + 'T23:59:59';
         
+        // IMPORTANTE: Calcular valor LÍQUIDO (gastos - reembolsos)
+        // Metas devem considerar apenas o valor líquido gasto, descontando reembolsos/estornos
+        // Usar SUM(amount) diretamente: valores negativos (gastos) + valores positivos (reembolsos) = valor líquido
         const query = `
           SELECT SUM(amount) as total
           FROM transactions
           WHERE category = ?
-          AND amount < 0
           AND (
             (account_type = 'BANK' OR account_type IS NULL) AND date >= ? AND date <= ?
             OR
@@ -4013,6 +4313,10 @@ app.get('/api/goals', async (req, res) => {
           AND description NOT LIKE '%pagamento recebido%'
           AND description NOT LIKE '%transferência recebida%'
           AND description NOT LIKE '%transferencia recebida%'
+          AND description NOT LIKE '%rend pago%'
+          AND description NOT LIKE '%rendimento%'
+          AND description NOT LIKE '%salário%'
+          AND description NOT LIKE '%salario%'
         `;
         const params = [
           category,
@@ -4024,6 +4328,9 @@ app.get('/api/goals', async (req, res) => {
         ];
 
         const result = database.prepare(query).get(...params);
+        // SUM(amount) retorna valor negativo (gastos) + positivo (reembolsos) = valor líquido
+        // Converter para positivo usando ABS para exibir na meta
+        // Exemplo: -980.68 (gastos) + 371.92 (reembolsos) = -608.76 → ABS = 608.76
         currentAmount = Math.abs(result?.total || 0);
       }
 
@@ -4164,11 +4471,1209 @@ app.delete('/api/goals/:id', (req, res) => {
   }
 });
 
+// ========== FINANCIAL GOALS (NOVAS METAS) ==========
+app.get('/api/financial-goals', async (req, res) => {
+  try {
+    const database = getDB();
+    
+    // Buscar todas as metas financeiras
+    const goals = database.prepare(`
+      SELECT 
+        id,
+        name,
+        type,
+        target_amount,
+        current_amount,
+        description,
+        target_date,
+        is_completed,
+        created_at,
+        updated_at
+      FROM financial_goals
+      ORDER BY 
+        is_completed ASC,
+        created_at DESC
+    `).all();
+
+    // Para metas do tipo "emergency_fund" (reserva de emergência), calcular o valor atual
+    // baseado no saldo atual das contas e calcular meta baseada em 6 meses de gastos
+    const goalsWithProgress = await Promise.all(goals.map(async (goal) => {
+      if (goal.type === 'emergency_fund') {
+        // Buscar saldo atual de todas as contas correntes
+        const bankBalanceResult = database.prepare(`
+          SELECT SUM(amount) as total
+          FROM transactions
+          WHERE (account_type = 'BANK' OR account_type IS NULL)
+        `).get();
+        const currentBankBalance = bankBalanceResult?.total || 0;
+        
+        goal.current_amount = Math.max(0, currentBankBalance);
+        
+        // Se a meta não foi definida, calcular baseado em 6 meses de gastos médios
+        if (!goal.target_amount || goal.target_amount === 0) {
+          const sixMonthsAgo = new Date();
+          sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+          const minDate = sixMonthsAgo.toISOString();
+          
+          const avgExpensesResult = database.prepare(`
+            SELECT AVG(ABS(amount)) as avg_expenses
+            FROM transactions
+            WHERE (account_type = 'BANK' OR account_type IS NULL)
+              AND amount < 0
+              AND date >= ?
+          `).get(minDate);
+          
+          const avgMonthlyExpenses = avgExpensesResult?.avg_expenses || 0;
+          goal.target_amount = avgMonthlyExpenses * 6; // 6 meses de gastos
+          
+          // Atualizar a meta no banco
+          database.prepare(`
+            UPDATE financial_goals
+            SET target_amount = ?
+            WHERE id = ?
+          `).run(goal.target_amount, goal.id);
+        }
+        
+        // Calcular sugestão de valor mensal para atingir a meta
+        const remaining = goal.target_amount - goal.current_amount;
+        const monthsToTarget = goal.target_date ? 
+          Math.max(1, Math.ceil((new Date(goal.target_date) - new Date()) / (1000 * 60 * 60 * 24 * 30))) : 
+          12; // Default: 12 meses
+        goal.suggested_monthly_amount = remaining > 0 ? remaining / monthsToTarget : 0;
+      }
+      
+      const progress = goal.target_amount > 0 
+        ? (goal.current_amount / goal.target_amount) * 100 
+        : 0;
+      
+      return {
+        ...goal,
+        progress: Math.min(100, Math.max(0, progress)),
+        remaining: Math.max(0, goal.target_amount - goal.current_amount),
+        isCompleted: goal.is_completed === 1 || progress >= 100
+      };
+    }));
+
+    res.json({ goals: goalsWithProgress });
+  } catch (error) {
+    console.error('[FINANCIAL_GOALS] Erro ao buscar metas:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/financial-goals', (req, res) => {
+  try {
+    const database = getDB();
+    const { name, type, targetAmount, description, targetDate, currentAmount } = req.body;
+
+    if (!name || !targetAmount) {
+      return res.status(400).json({ error: 'Nome e valor alvo são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      INSERT INTO financial_goals (name, type, target_amount, current_amount, description, target_date, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      name,
+      type || 'custom',
+      targetAmount,
+      currentAmount || 0,
+      description || null,
+      targetDate || null
+    );
+
+    res.json({ 
+      success: true, 
+      id: result.lastInsertRowid,
+      message: 'Meta criada com sucesso'
+    });
+  } catch (error) {
+    console.error('[FINANCIAL_GOALS] Erro ao criar meta:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/financial-goals/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { name, type, targetAmount, description, targetDate, currentAmount, isCompleted } = req.body;
+
+    if (!name || !targetAmount) {
+      return res.status(400).json({ error: 'Nome e valor alvo são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      UPDATE financial_goals 
+      SET name = ?,
+          type = ?,
+          target_amount = ?,
+          current_amount = ?,
+          description = ?,
+          target_date = ?,
+          is_completed = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name,
+      type || 'custom',
+      targetAmount,
+      currentAmount || 0,
+      description || null,
+      targetDate || null,
+      isCompleted ? 1 : 0,
+      id
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Meta não encontrada' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Meta atualizada com sucesso'
+    });
+  } catch (error) {
+    console.error('[FINANCIAL_GOALS] Erro ao atualizar meta:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/financial-goals/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    
+    const result = database.prepare('DELETE FROM financial_goals WHERE id = ?').run(id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Meta não encontrada' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Meta deletada com sucesso'
+    });
+  } catch (error) {
+    console.error('[FINANCIAL_GOALS] Erro ao deletar meta:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== RECURRING TRANSACTIONS ==========
+// Identificar transações recorrentes automaticamente
+app.post('/api/recurring-transactions/detect', async (req, res) => {
+  try {
+    const database = getDB();
+    
+    // Buscar todas as transações dos últimos 6 meses
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    const minDate = sixMonthsAgo.toISOString();
+    
+    const transactions = database.prepare(`
+      SELECT id, date, amount, description, category
+      FROM transactions
+      WHERE amount < 0
+        AND date >= ?
+      ORDER BY date DESC
+    `).all(minDate);
+    
+    // Agrupar por descrição normalizada
+    const normalizedGroups = {};
+    transactions.forEach(tx => {
+      // Normalizar descrição (remover espaços extras, converter para minúsculas)
+      const normalized = tx.description
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ');
+      
+      if (!normalizedGroups[normalized]) {
+        normalizedGroups[normalized] = [];
+      }
+      normalizedGroups[normalized].push(tx);
+    });
+    
+    // Identificar padrões recorrentes (3+ ocorrências, mesmo valor aproximado)
+    const recurringPatterns = [];
+    Object.keys(normalizedGroups).forEach(pattern => {
+      const group = normalizedGroups[pattern];
+      if (group.length >= 3) {
+        // Calcular média e desvio padrão
+        const amounts = group.map(t => Math.abs(t.amount));
+        const avg = amounts.reduce((a, b) => a + b, 0) / amounts.length;
+        const variance = amounts.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / amounts.length;
+        const stdDev = Math.sqrt(variance);
+        
+        // Se o desvio padrão é menor que 10% da média, é uma transação recorrente
+        if (stdDev / avg < 0.1) {
+          // Verificar periodicidade (mensal, quinzenal, etc)
+          const dates = group.map(t => new Date(t.date)).sort((a, b) => a - b);
+          const intervals = [];
+          for (let i = 1; i < dates.length; i++) {
+            const diff = (dates[i] - dates[i-1]) / (1000 * 60 * 60 * 24); // dias
+            intervals.push(diff);
+          }
+          
+          const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          let frequency = 'monthly';
+          if (avgInterval >= 25 && avgInterval <= 35) frequency = 'monthly';
+          else if (avgInterval >= 12 && avgInterval <= 18) frequency = 'biweekly';
+          else if (avgInterval >= 6 && avgInterval <= 9) frequency = 'weekly';
+          else if (avgInterval >= 85 && avgInterval <= 95) frequency = 'quarterly';
+          else if (avgInterval >= 360 && avgInterval <= 370) frequency = 'yearly';
+          
+          recurringPatterns.push({
+            description_pattern: pattern,
+            category: group[0].category,
+            average_amount: avg,
+            frequency: frequency,
+            last_amount: Math.abs(group[0].amount),
+            last_date: group[0].date,
+            transaction_count: group.length,
+            transactions: group.slice(0, 5) // Últimas 5 para referência
+          });
+        }
+      }
+    });
+    
+    // Inserir ou atualizar transações recorrentes
+    const insertOrUpdate = database.prepare(`
+      INSERT INTO recurring_transactions (
+        description_pattern, category, average_amount, frequency, 
+        last_amount, last_date, transaction_count, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(description_pattern) DO UPDATE SET
+        average_amount = ?,
+        last_amount = ?,
+        last_date = ?,
+        transaction_count = ?,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    
+    recurringPatterns.forEach(pattern => {
+      insertOrUpdate.run(
+        pattern.description_pattern,
+        pattern.category,
+        pattern.average_amount,
+        pattern.frequency,
+        pattern.last_amount,
+        pattern.last_date,
+        pattern.transaction_count,
+        pattern.average_amount,
+        pattern.last_amount,
+        pattern.last_date,
+        pattern.transaction_count
+      );
+    });
+    
+    res.json({
+      success: true,
+      detected: recurringPatterns.length,
+      patterns: recurringPatterns
+    });
+  } catch (error) {
+    console.error('[RECURRING] Erro ao detectar transações recorrentes:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/recurring-transactions', (req, res) => {
+  try {
+    const database = getDB();
+    
+    const recurring = database.prepare(`
+      SELECT 
+        rt.*,
+        COUNT(rtm.transaction_id) as matched_count
+      FROM recurring_transactions rt
+      LEFT JOIN recurring_transaction_matches rtm ON rt.id = rtm.recurring_transaction_id
+      WHERE rt.is_active = 1
+      GROUP BY rt.id
+      ORDER BY rt.transaction_count DESC, rt.updated_at DESC
+    `).all();
+    
+    // Para cada transação recorrente, verificar se há alertas (mudança de valor)
+    const recurringWithAlerts = recurring.map(rec => {
+      const alerts = [];
+      
+      // Verificar se o último valor difere muito da média
+      if (rec.alert_threshold && rec.last_amount) {
+        const diff = Math.abs(rec.last_amount - rec.average_amount);
+        const diffPercent = (diff / rec.average_amount) * 100;
+        
+        if (diffPercent > rec.alert_threshold) {
+          alerts.push({
+            type: 'value_change',
+            message: `Valor mudou ${diffPercent.toFixed(1)}% da média (${rec.average_amount.toFixed(2)} → ${rec.last_amount.toFixed(2)})`,
+            severity: diffPercent > 20 ? 'high' : 'medium'
+          });
+        }
+      }
+      
+      // Verificar se está atrasada (baseado na frequência)
+      if (rec.last_date) {
+        const lastDate = new Date(rec.last_date);
+        const now = new Date();
+        let expectedDays = 30;
+        if (rec.frequency === 'weekly') expectedDays = 7;
+        else if (rec.frequency === 'biweekly') expectedDays = 14;
+        else if (rec.frequency === 'quarterly') expectedDays = 90;
+        else if (rec.frequency === 'yearly') expectedDays = 365;
+        
+        const daysSince = (now - lastDate) / (1000 * 60 * 60 * 24);
+        if (daysSince > expectedDays + 5) {
+          alerts.push({
+            type: 'overdue',
+            message: `Transação atrasada há ${Math.floor(daysSince - expectedDays)} dias`,
+            severity: 'high'
+          });
+        }
+      }
+      
+      return {
+        ...rec,
+        alerts
+      };
+    });
+    
+    res.json(recurringWithAlerts);
+  } catch (error) {
+    console.error('[RECURRING] Erro ao buscar transações recorrentes:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/recurring-transactions', (req, res) => {
+  try {
+    const database = getDB();
+    const { description_pattern, category, average_amount, frequency, alert_threshold } = req.body;
+    
+    if (!description_pattern || !average_amount || !frequency) {
+      return res.status(400).json({ error: 'Campos obrigatórios: description_pattern, average_amount, frequency' });
+    }
+    
+    const result = database.prepare(`
+      INSERT INTO recurring_transactions (
+        description_pattern, category, average_amount, frequency, alert_threshold, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(description_pattern, category || 'Outros', average_amount, frequency, alert_threshold || 15);
+    
+    res.json({
+      success: true,
+      id: result.lastInsertRowid,
+      message: 'Transação recorrente criada com sucesso'
+    });
+  } catch (error) {
+    console.error('[RECURRING] Erro ao criar transação recorrente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/recurring-transactions/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { category, average_amount, frequency, alert_threshold, is_active } = req.body;
+    
+    const updates = [];
+    const values = [];
+    
+    if (category !== undefined) {
+      updates.push('category = ?');
+      values.push(category);
+    }
+    if (average_amount !== undefined) {
+      updates.push('average_amount = ?');
+      values.push(average_amount);
+    }
+    if (frequency !== undefined) {
+      updates.push('frequency = ?');
+      values.push(frequency);
+    }
+    if (alert_threshold !== undefined) {
+      updates.push('alert_threshold = ?');
+      values.push(alert_threshold);
+    }
+    if (is_active !== undefined) {
+      updates.push('is_active = ?');
+      values.push(is_active ? 1 : 0);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo para atualizar' });
+    }
+    
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+    
+    const result = database.prepare(`
+      UPDATE recurring_transactions
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `).run(...values);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Transação recorrente não encontrada' });
+    }
+    
+    res.json({ success: true, message: 'Transação recorrente atualizada com sucesso' });
+  } catch (error) {
+    console.error('[RECURRING] Erro ao atualizar transação recorrente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/recurring-transactions/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    
+    const result = database.prepare('DELETE FROM recurring_transactions WHERE id = ?').run(id);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Transação recorrente não encontrada' });
+    }
+    
+    res.json({ success: true, message: 'Transação recorrente deletada com sucesso' });
+  } catch (error) {
+    console.error('[RECURRING] Erro ao deletar transação recorrente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== DUE DATES (CALENDÁRIO DE VENCIMENTOS) ==========
+app.get('/api/due-dates', (req, res) => {
+  try {
+    const database = getDB();
+    
+    // Buscar todos os vencimentos ativos
+    const dueDates = database.prepare(`
+      SELECT 
+        id,
+        name,
+        type,
+        amount,
+        due_day,
+        source_type,
+        source_id,
+        is_active
+      FROM due_dates
+      WHERE is_active = 1
+      ORDER BY due_day ASC
+    `).all();
+    
+    // Buscar também vencimentos de empréstimos e gastos previstos
+    const loans = database.prepare(`
+      SELECT 
+        id,
+        description as name,
+        'loan' as type,
+        installment_value as amount,
+        CAST(substr(due_date, 1, 2) AS INTEGER) as due_day,
+        'loan' as source_type,
+        id as source_id
+      FROM loans
+      WHERE due_date IS NOT NULL AND due_date != ''
+    `).all();
+    
+    const expectedExpenses = database.prepare(`
+      SELECT 
+        id,
+        name,
+        'expected_expense' as type,
+        amount,
+        NULL as due_day,
+        'expected_expense' as source_type,
+        id as source_id
+      FROM expected_expenses
+      WHERE end_date IS NULL OR end_date >= date('now')
+    `).all();
+    
+    // Agrupar por dia do mês (apenas itens com due_day válido)
+    // Garantir que due_day seja um número para consistência
+    const calendar = {};
+    [...dueDates, ...loans].forEach(item => {
+      const day = item.due_day;
+      if (day !== null && day !== undefined) {
+        const dayNum = typeof day === 'string' ? parseInt(day) : day;
+        if (dayNum >= 1 && dayNum <= 31) {
+          if (!calendar[dayNum]) {
+            calendar[dayNum] = [];
+          }
+          calendar[dayNum].push(item);
+        }
+      }
+    });
+    
+    res.json({
+      calendar,
+      all: [...dueDates, ...loans, ...expectedExpenses]
+    });
+  } catch (error) {
+    console.error('[DUE_DATES] Erro ao buscar vencimentos:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/due-dates', (req, res) => {
+  try {
+    const database = getDB();
+    const { name, type, amount, due_day, source_type, source_id } = req.body;
+    
+    if (!name || !due_day) {
+      return res.status(400).json({ error: 'Campos obrigatórios: name, due_day' });
+    }
+    
+    // Verificar se já existe um vencimento com mesmo nome e dia (para evitar duplicatas)
+    const existing = database.prepare(`
+      SELECT id FROM due_dates 
+      WHERE name = ? AND due_day = ? AND is_active = 1
+      LIMIT 1
+    `).get(name, parseInt(due_day));
+    
+    if (existing) {
+      return res.status(400).json({ error: 'Já existe um vencimento com este nome e dia' });
+    }
+    
+    const result = database.prepare(`
+      INSERT INTO due_dates (name, type, amount, due_day, source_type, source_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(name, type || 'custom', amount || null, parseInt(due_day), source_type || null, source_id || null);
+    
+    res.json({
+      success: true,
+      id: result.lastInsertRowid,
+      message: 'Vencimento criado com sucesso'
+    });
+  } catch (error) {
+    console.error('[DUE_DATES] Erro ao criar vencimento:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/due-dates/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { name, amount, due_day, is_active } = req.body;
+    
+    const updates = [];
+    const values = [];
+    
+    if (name !== undefined) {
+      updates.push('name = ?');
+      values.push(name);
+    }
+    if (amount !== undefined) {
+      updates.push('amount = ?');
+      values.push(amount);
+    }
+    if (due_day !== undefined) {
+      updates.push('due_day = ?');
+      values.push(due_day);
+    }
+    if (is_active !== undefined) {
+      updates.push('is_active = ?');
+      values.push(is_active ? 1 : 0);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nenhum campo para atualizar' });
+    }
+    
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+    
+    const result = database.prepare(`
+      UPDATE due_dates
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `).run(...values);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Vencimento não encontrado' });
+    }
+    
+    res.json({ success: true, message: 'Vencimento atualizado com sucesso' });
+  } catch (error) {
+    console.error('[DUE_DATES] Erro ao atualizar vencimento:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/due-dates/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    
+    const result = database.prepare('DELETE FROM due_dates WHERE id = ?').run(id);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Vencimento não encontrado' });
+    }
+    
+    res.json({ success: true, message: 'Vencimento deletado com sucesso' });
+  } catch (error) {
+    console.error('[DUE_DATES] Erro ao deletar vencimento:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== ANÁLISES AVANÇADAS ==========
+
+// Data mínima para análises: dezembro de 2024
+const ANALYTICS_MIN_DATE = '2024-12-01T00:00:00';
+
+// Comparação de Períodos
+app.get('/api/analytics/period-comparison', async (req, res) => {
+  try {
+    const database = getDB();
+    const { type = 'month' } = req.query; // 'month' ou 'year'
+    
+    const now = new Date();
+    let currentStart, currentEnd, previousStart, previousEnd;
+    
+    if (type === 'month') {
+      // Mês atual
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      currentStart = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01T00:00:00`;
+      const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+      currentEnd = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T23:59:59`;
+      
+      // Mês anterior
+      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
+      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear;
+      previousStart = `${prevYear}-${String(prevMonth).padStart(2, '0')}-01T00:00:00`;
+      const prevLastDay = new Date(prevYear, prevMonth, 0).getDate();
+      previousEnd = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(prevLastDay).padStart(2, '0')}T23:59:59`;
+    } else {
+      // Ano atual
+      const currentYear = now.getFullYear();
+      currentStart = `${currentYear}-01-01T00:00:00`;
+      currentEnd = `${currentYear}-12-31T23:59:59`;
+      
+      // Ano anterior
+      const prevYear = currentYear - 1;
+      previousStart = `${prevYear}-01-01T00:00:00`;
+      previousEnd = `${prevYear}-12-31T23:59:59`;
+    }
+    
+    // Garantir que não vamos antes de dezembro de 2024
+    const minStart = currentStart < ANALYTICS_MIN_DATE ? ANALYTICS_MIN_DATE : currentStart;
+    const minPrevStart = previousStart < ANALYTICS_MIN_DATE ? ANALYTICS_MIN_DATE : previousStart;
+    
+    // Calcular totais do período atual
+    const currentData = database.prepare(`
+      SELECT 
+        SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
+        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+        COUNT(*) as transactions
+      FROM transactions
+      WHERE (account_type = 'BANK' OR account_type IS NULL)
+        AND date >= ? AND date <= ?
+        AND date >= ?
+    `).get(minStart, currentEnd, ANALYTICS_MIN_DATE);
+    
+    // Calcular totais do período anterior (só se for depois de dezembro)
+    let previousData = { expenses: 0, income: 0, transactions: 0 };
+    if (previousEnd >= ANALYTICS_MIN_DATE) {
+      previousData = database.prepare(`
+        SELECT 
+          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
+          SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+          COUNT(*) as transactions
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND date >= ? AND date <= ?
+          AND date >= ?
+      `).get(minPrevStart, previousEnd, ANALYTICS_MIN_DATE) || previousData;
+    }
+    
+    const currentExpenses = currentData?.expenses || 0;
+    const currentIncome = currentData?.income || 0;
+    const previousExpenses = previousData?.expenses || 0;
+    const previousIncome = previousData?.income || 0;
+    
+    const expenseChange = previousExpenses > 0 
+      ? ((currentExpenses - previousExpenses) / previousExpenses) * 100 
+      : 0;
+    const incomeChange = previousIncome > 0 
+      ? ((currentIncome - previousIncome) / previousIncome) * 100 
+      : 0;
+    
+    res.json({
+      current: {
+        expenses: currentExpenses,
+        income: currentIncome,
+        balance: currentIncome - currentExpenses,
+        transactions: currentData?.transactions || 0
+      },
+      previous: {
+        expenses: previousExpenses,
+        income: previousIncome,
+        balance: previousIncome - previousExpenses,
+        transactions: previousData?.transactions || 0
+      },
+      changes: {
+        expenses: expenseChange,
+        income: incomeChange,
+        balance: previousExpenses > 0 || previousIncome > 0 
+          ? (((currentIncome - currentExpenses) - (previousIncome - previousExpenses)) / Math.max(Math.abs(previousIncome - previousExpenses), 1)) * 100 
+          : 0
+      }
+    });
+  } catch (error) {
+    console.error('[ANALYTICS] Erro ao comparar períodos:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Evolução Mensal/Anual
+app.get('/api/analytics/evolution', async (req, res) => {
+  try {
+    const database = getDB();
+    const { type = 'month', months = 12 } = req.query; // 'month' ou 'year', quantidade de meses
+    
+    const now = new Date();
+    const data = [];
+    
+    // Data de início: dezembro de 2024
+    const minDate = new Date('2024-12-01');
+    
+    for (let i = parseInt(months) - 1; i >= 0; i--) {
+      let start, end, label;
+      
+      if (type === 'month') {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+        start = `${year}-${String(month).padStart(2, '0')}-01T00:00:00`;
+        const lastDay = new Date(year, month, 0).getDate();
+        end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T23:59:59`;
+        label = `${String(month).padStart(2, '0')}/${year}`;
+      } else {
+        const year = now.getFullYear() - i;
+        start = `${year}-01-01T00:00:00`;
+        end = `${year}-12-31T23:59:59`;
+        label = `${year}`;
+      }
+      
+      // Pular meses antes de dezembro de 2024
+      const periodStart = new Date(start);
+      if (periodStart < minDate) {
+        continue;
+      }
+      
+      // Garantir que start não seja antes de dezembro
+      const actualStart = start < ANALYTICS_MIN_DATE ? ANALYTICS_MIN_DATE : start;
+      
+      const result = database.prepare(`
+        SELECT 
+          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
+          SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND date >= ? AND date <= ?
+          AND date >= ?
+      `).get(actualStart, end, ANALYTICS_MIN_DATE);
+      
+      data.push({
+        period: label,
+        expenses: result?.expenses || 0,
+        income: result?.income || 0,
+        balance: (result?.income || 0) - (result?.expenses || 0)
+      });
+    }
+    
+    res.json({ data });
+  } catch (error) {
+    console.error('[ANALYTICS] Erro ao buscar evolução:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Projeção Financeira
+app.get('/api/analytics/projection', async (req, res) => {
+  try {
+    const database = getDB();
+    const { months = 6 } = req.query;
+    
+    // Saldo atual (total real da conta, não filtrado por data)
+    const currentBalanceResult = database.prepare(`
+      SELECT SUM(amount) as total
+      FROM transactions
+      WHERE (account_type = 'BANK' OR account_type IS NULL)
+    `).get();
+    const currentBalance = currentBalanceResult?.total || 0;
+    
+    // Média de receitas dos últimos 3 meses (apenas a partir de dezembro)
+    const now = new Date();
+    const avgIncomeResult = database.prepare(`
+      SELECT AVG(income) as avg_income
+      FROM (
+        SELECT 
+          SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND date >= date('now', '-3 months')
+          AND date >= ?
+        GROUP BY strftime('%Y-%m', date)
+      )
+    `).get(ANALYTICS_MIN_DATE);
+    const avgMonthlyIncome = avgIncomeResult?.avg_income || 0;
+    
+    // Média de gastos dos últimos 3 meses (apenas a partir de dezembro)
+    const avgExpensesResult = database.prepare(`
+      SELECT AVG(expenses) as avg_expenses
+      FROM (
+        SELECT 
+          SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND date >= date('now', '-3 months')
+          AND date >= ?
+        GROUP BY strftime('%Y-%m', date)
+      )
+    `).get(ANALYTICS_MIN_DATE);
+    const avgMonthlyExpenses = avgExpensesResult?.avg_expenses || 0;
+    
+    // Gastos previstos futuros
+    const futureExpenses = database.prepare(`
+      SELECT SUM(amount) as total
+      FROM expected_expenses
+      WHERE end_date IS NULL OR end_date >= date('now')
+    `).all();
+    const totalExpectedExpenses = futureExpenses.reduce((sum, e) => sum + (e.total || 0), 0);
+    
+    // Projeção mês a mês
+    const projection = [];
+    let projectedBalance = currentBalance;
+    
+    for (let i = 1; i <= parseInt(months); i++) {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+      
+      // Gastos previstos para este mês
+      const monthExpenses = database.prepare(`
+        SELECT SUM(amount) as total
+        FROM expected_expenses
+        WHERE (end_date IS NULL OR (substr(end_date, 1, 7) >= ?))
+          AND (end_date IS NULL OR substr(end_date, 1, 7) >= ?)
+      `).get(monthKey, monthKey);
+      const expectedForMonth = monthExpenses?.total || 0;
+      
+      const monthlyExpenses = avgMonthlyExpenses + expectedForMonth;
+      const monthlyIncome = avgMonthlyIncome;
+      const monthlyBalance = monthlyIncome - monthlyExpenses;
+      
+      projectedBalance += monthlyBalance;
+      
+      projection.push({
+        month: monthKey,
+        income: monthlyIncome,
+        expenses: monthlyExpenses,
+        balance: monthlyBalance,
+        projectedBalance: projectedBalance,
+        hasNegativeAlert: projectedBalance < 0
+      });
+    }
+    
+    res.json({
+      currentBalance,
+      avgMonthlyIncome,
+      avgMonthlyExpenses,
+      projection
+    });
+  } catch (error) {
+    console.error('[ANALYTICS] Erro ao calcular projeção:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Análise de Tendências
+app.get('/api/analytics/trends', async (req, res) => {
+  try {
+    const database = getDB();
+    
+    // Comparar últimos 3 meses vs 3 meses anteriores (apenas a partir de dezembro)
+    const now = new Date();
+    const recentStart = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+    const recentEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const oldStart = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+    const oldEnd = new Date(now.getFullYear(), now.getMonth() - 3, 0);
+    
+    const recentStartStr = recentStart.toISOString().split('T')[0] + 'T00:00:00';
+    const recentEndStr = recentEnd.toISOString().split('T')[0] + 'T23:59:59';
+    const oldStartStr = oldStart.toISOString().split('T')[0] + 'T00:00:00';
+    const oldEndStr = oldEnd.toISOString().split('T')[0] + 'T23:59:59';
+    
+    // Garantir que não vamos antes de dezembro
+    const actualRecentStart = recentStartStr < ANALYTICS_MIN_DATE ? ANALYTICS_MIN_DATE : recentStartStr;
+    const actualOldStart = oldStartStr < ANALYTICS_MIN_DATE ? ANALYTICS_MIN_DATE : oldStartStr;
+    
+    // Gastos por categoria - período recente
+    const recentCategories = database.prepare(`
+      SELECT 
+        category,
+        SUM(ABS(amount)) as total
+      FROM transactions
+      WHERE (account_type = 'BANK' OR account_type IS NULL)
+        AND amount < 0
+        AND date >= ? AND date <= ?
+        AND date >= ?
+      GROUP BY category
+      ORDER BY total DESC
+    `).all(actualRecentStart, recentEndStr, ANALYTICS_MIN_DATE);
+    
+    // Gastos por categoria - período antigo (só se for depois de dezembro)
+    let oldCategories = [];
+    if (oldEndStr >= ANALYTICS_MIN_DATE) {
+      oldCategories = database.prepare(`
+        SELECT 
+          category,
+          SUM(ABS(amount)) as total
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND amount < 0
+          AND date >= ? AND date <= ?
+          AND date >= ?
+        GROUP BY category
+        ORDER BY total DESC
+      `).all(actualOldStart, oldEndStr, ANALYTICS_MIN_DATE);
+    }
+    
+    // Criar mapas para comparação
+    const recentMap = {};
+    recentCategories.forEach(cat => {
+      recentMap[cat.category] = cat.total;
+    });
+    
+    const oldMap = {};
+    oldCategories.forEach(cat => {
+      oldMap[cat.category] = cat.total;
+    });
+    
+    // Calcular tendências
+    const trends = [];
+    const allCategories = new Set([...Object.keys(recentMap), ...Object.keys(oldMap)]);
+    
+    allCategories.forEach(category => {
+      const recent = recentMap[category] || 0;
+      const old = oldMap[category] || 0;
+      const change = old > 0 ? ((recent - old) / old) * 100 : (recent > 0 ? 100 : 0);
+      
+      trends.push({
+        category,
+        recent,
+        old,
+        change,
+        trend: change > 10 ? 'growing' : change < -10 ? 'decreasing' : 'stable'
+      });
+    });
+    
+    // Ordenar por maior mudança
+    trends.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+    
+    // Análise de padrões (gastos por dia da semana) - apenas a partir de dezembro
+    const dayOfWeekPattern = database.prepare(`
+      SELECT 
+        strftime('%w', date) as day_of_week,
+        SUM(ABS(amount)) as total,
+        COUNT(*) as count
+      FROM transactions
+      WHERE (account_type = 'BANK' OR account_type IS NULL)
+        AND amount < 0
+        AND date >= date('now', '-3 months')
+        AND date >= ?
+      GROUP BY day_of_week
+      ORDER BY total DESC
+    `).all(ANALYTICS_MIN_DATE);
+    
+    const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    const dayPattern = dayOfWeekPattern.map(d => ({
+      day: dayNames[parseInt(d.day_of_week)],
+      total: d.total,
+      count: d.count,
+      avg: d.total / d.count
+    }));
+    
+    res.json({
+      categoryTrends: trends,
+      dayOfWeekPattern: dayPattern
+    });
+  } catch (error) {
+    console.error('[ANALYTICS] Erro ao analisar tendências:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Dashboard de Saúde Financeira
+app.get('/api/analytics/health', async (req, res) => {
+  try {
+    const database = getDB();
+    
+    // Saldo atual (total real da conta, não filtrado por data)
+    const balanceResult = database.prepare(`
+      SELECT SUM(amount) as total
+      FROM transactions
+      WHERE (account_type = 'BANK' OR account_type IS NULL)
+    `).get();
+    const currentBalance = balanceResult?.total || 0;
+    
+    // Média de gastos mensais (últimos 6 meses, apenas a partir de dezembro)
+    const avgMonthlyExpensesResult = database.prepare(`
+      SELECT AVG(expenses) as avg_expenses
+      FROM (
+        SELECT 
+          SUM(ABS(amount)) as expenses
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND amount < 0
+          AND date >= date('now', '-6 months')
+          AND date >= ?
+        GROUP BY strftime('%Y-%m', date)
+      )
+    `).get(ANALYTICS_MIN_DATE);
+    const avgMonthlyExpenses = avgMonthlyExpensesResult?.avg_expenses || 0;
+    
+    // Média de receitas mensais (últimos 6 meses, apenas a partir de dezembro)
+    const avgMonthlyIncomeResult = database.prepare(`
+      SELECT AVG(income) as avg_income
+      FROM (
+        SELECT 
+          SUM(amount) as income
+        FROM transactions
+        WHERE (account_type = 'BANK' OR account_type IS NULL)
+          AND amount > 0
+          AND date >= date('now', '-6 months')
+          AND date >= ?
+        GROUP BY strftime('%Y-%m', date)
+      )
+    `).get(ANALYTICS_MIN_DATE);
+    const avgMonthlyIncome = avgMonthlyIncomeResult?.avg_income || 0;
+    
+    // Total de empréstimos ativos
+    const loansResult = database.prepare(`
+      SELECT 
+        SUM((total_amount - (paid_installments * installment_value)) * (1 + COALESCE(interest_rate, 0) / 100)) as total_debt
+      FROM loans
+      WHERE paid_installments < total_installments
+    `).get();
+    const totalDebt = loansResult?.total_debt || 0;
+    
+    // Faturas de cartão pendentes (apenas a partir de dezembro)
+    const creditBillsResult = database.prepare(`
+      SELECT SUM(amount) as total
+      FROM transactions
+      WHERE account_type = 'CREDIT'
+        AND amount < 0
+        AND date >= date('now', '-1 month')
+        AND date >= ?
+    `).get(ANALYTICS_MIN_DATE);
+    const creditBills = Math.abs(creditBillsResult?.total || 0);
+    
+    // Calcular indicadores
+    const emergencyFundMonths = avgMonthlyExpenses > 0 ? currentBalance / avgMonthlyExpenses : 0;
+    const debtToIncomeRatio = avgMonthlyIncome > 0 ? (totalDebt + creditBills) / avgMonthlyIncome : 0;
+    const savingsRate = avgMonthlyIncome > 0 ? ((avgMonthlyIncome - avgMonthlyExpenses) / avgMonthlyIncome) * 100 : 0;
+    const expenseToIncomeRatio = avgMonthlyIncome > 0 ? (avgMonthlyExpenses / avgMonthlyIncome) * 100 : 0;
+    
+    // Calcular score (0-100)
+    let score = 100;
+    
+    // Reserva de emergência (0-30 pontos)
+    if (emergencyFundMonths >= 6) score -= 0;
+    else if (emergencyFundMonths >= 3) score -= 10;
+    else if (emergencyFundMonths >= 1) score -= 20;
+    else score -= 30;
+    
+    // Endividamento (0-30 pontos)
+    if (debtToIncomeRatio <= 0.3) score -= 0;
+    else if (debtToIncomeRatio <= 0.5) score -= 10;
+    else if (debtToIncomeRatio <= 0.7) score -= 20;
+    else score -= 30;
+    
+    // Taxa de poupança (0-20 pontos)
+    if (savingsRate >= 20) score -= 0;
+    else if (savingsRate >= 10) score -= 5;
+    else if (savingsRate >= 5) score -= 10;
+    else if (savingsRate >= 0) score -= 15;
+    else score -= 20;
+    
+    // Saldo (0-20 pontos)
+    if (currentBalance < 0) score -= 20;
+    else if (currentBalance < avgMonthlyExpenses) score -= 10;
+    
+    score = Math.max(0, Math.min(100, score));
+    
+    // Sugestões de melhoria
+    const suggestions = [];
+    if (emergencyFundMonths < 6) {
+      const recommendedAmount = avgMonthlyExpenses * 6;
+      suggestions.push({
+        type: 'emergency_fund',
+        priority: 'high',
+        message: `Reserva de emergência baixa (${emergencyFundMonths.toFixed(1)} meses). Recomendado: 6 meses de gastos (R$ ${recommendedAmount.toFixed(2)})`
+      });
+    }
+    if (debtToIncomeRatio > 0.3) {
+      suggestions.push({
+        type: 'debt',
+        priority: debtToIncomeRatio > 0.5 ? 'high' : 'medium',
+        message: `Endividamento alto (${(debtToIncomeRatio * 100).toFixed(0)}% da renda). Considere reduzir dívidas.`
+      });
+    }
+    if (savingsRate < 10) {
+      suggestions.push({
+        type: 'savings',
+        priority: savingsRate < 0 ? 'high' : 'medium',
+        message: `Taxa de poupança baixa (${savingsRate.toFixed(1)}%). Tente economizar pelo menos 10% da renda.`
+      });
+    }
+    if (expenseToIncomeRatio > 90) {
+      suggestions.push({
+        type: 'expenses',
+        priority: 'high',
+        message: `Gastos muito altos (${expenseToIncomeRatio.toFixed(0)}% da renda). Revise suas despesas.`
+      });
+    }
+    
+    res.json({
+      score: Math.round(score),
+      indicators: {
+        emergencyFundMonths: emergencyFundMonths.toFixed(1),
+        debtToIncomeRatio: (debtToIncomeRatio * 100).toFixed(1),
+        savingsRate: savingsRate.toFixed(1),
+        expenseToIncomeRatio: expenseToIncomeRatio.toFixed(1)
+      },
+      values: {
+        currentBalance,
+        avgMonthlyExpenses,
+        avgMonthlyIncome,
+        totalDebt,
+        creditBills
+      },
+      suggestions
+    });
+  } catch (error) {
+    console.error('[ANALYTICS] Erro ao calcular saúde financeira:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
 // ========== GASTOS PREVISTOS ==========
 app.get('/api/expected-expenses', async (req, res) => {
   try {
     const database = getDB();
     const { period } = req.query; // Formato: "2025-01" ou "all"
+    
+    console.log(`[EXPECTED_EXPENSES] ===== NOVA REQUISIÇÃO =====`);
+    console.log(`[EXPECTED_EXPENSES] Período recebido na query: "${period}"`);
     
     // Determinar período atual se não especificado
     let targetYear, targetMonth;
@@ -4176,25 +5681,96 @@ app.get('/api/expected-expenses', async (req, res) => {
       const [year, month] = period.split('-').map(Number);
       targetYear = year;
       targetMonth = month;
+      console.log(`[EXPECTED_EXPENSES] Período específico: ${targetYear}-${String(targetMonth).padStart(2, '0')}`);
     } else {
       const now = new Date();
       targetYear = now.getFullYear();
       targetMonth = now.getMonth() + 1;
+      console.log(`[EXPECTED_EXPENSES] Usando mês atual: ${targetYear}-${String(targetMonth).padStart(2, '0')}`);
     }
 
-    const expenses = database.prepare(`
+    // Buscar regras de validação
+    const validationRules = database.prepare(`
+      SELECT expense_name, recipient_names
+      FROM validation_rules
+    `).all();
+    
+    console.log('[EXPECTED_EXPENSES] Regras de validação encontradas:', validationRules);
+    
+    const rulesMap = {};
+    validationRules.forEach(rule => {
+      // Normalizar removendo acentos para comparação mais flexível
+      const normalizedName = rule.expense_name.toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      rulesMap[normalizedName] = rule.recipient_names.split(',').map(n => n.trim().toLowerCase());
+      // Também adicionar a versão original (com acentos)
+      rulesMap[rule.expense_name.toLowerCase()] = rule.recipient_names.split(',').map(n => n.trim().toLowerCase());
+    });
+    
+    console.log('[EXPECTED_EXPENSES] RulesMap:', rulesMap);
+
+    // Buscar gastos previstos
+    // Filtrar: mostrar apenas gastos que devem aparecer neste mês
+    // - Se end_date é null (indeterminado): aparece sempre
+    // - Se end_date existe: aparece se o mês atual <= mês de encerramento
+    const monthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+    const monthEnd = `${targetYear}-${String(targetMonth).padStart(2, '0')}-${new Date(targetYear, targetMonth, 0).getDate()}`;
+    
+    // Verificar se o período atual é futuro (para não considerar is_paid de meses anteriores)
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const isFuturePeriod = targetYear > currentYear || (targetYear === currentYear && targetMonth > currentMonth);
+    const isCurrentPeriod = targetYear === currentYear && targetMonth === currentMonth;
+    
+    // Buscar gastos previstos
+    // Filtrar: mostrar apenas gastos que devem aparecer neste mês
+    // - Se end_date é null (indeterminado): aparece sempre
+    // - Se end_date existe: aparece se o mês atual <= mês de encerramento
+    // Buscar todos os gastos primeiro
+    const allExpenses = database.prepare(`
       SELECT 
         id,
         name,
         amount,
         end_date,
         payment_method,
+        is_paid,
         created_at,
         updated_at
       FROM expected_expenses
       ORDER BY name ASC, created_at DESC
     `).all();
+    
+    // Filtrar gastos que devem aparecer neste mês
+    const expenses = allExpenses.filter(expense => {
+      // Se não tem data de encerramento, aparece sempre
+      if (!expense.end_date) {
+        return true;
+      }
+      
+      // Se tem data de encerramento, verificar se o mês atual é <= ao mês de encerramento
+      const endDate = new Date(expense.end_date);
+      const endYear = endDate.getFullYear();
+      const endMonth = endDate.getMonth() + 1; // 1-indexed
+      
+      // Comparar: ano atual > ano de encerramento OU (ano igual E mês atual > mês de encerramento)
+      // Se o mês atual for maior que o mês de encerramento, não deve aparecer
+      if (targetYear > endYear) {
+        return false; // Ano atual já passou do ano de encerramento
+      }
+      if (targetYear < endYear) {
+        return true; // Ainda não chegou no ano de encerramento
+      }
+      // Mesmo ano: verificar mês
+      return targetMonth <= endMonth; // Aparece se mês atual <= mês de encerramento
+    });
 
+    console.log(`[EXPECTED_EXPENSES] Total de gastos previstos encontrados: ${expenses.length}`);
+    console.log(`[EXPECTED_EXPENSES] Nomes dos gastos:`, expenses.map(e => e.name));
+    console.log(`[EXPECTED_EXPENSES] Período sendo usado: ${targetYear}-${String(targetMonth).padStart(2, '0')}`);
+    
     // Para cada gasto previsto, verificar se foi pago no período atual
     const expensesWithStatus = expenses.map(expense => {
       // Verificar se tem data de encerramento e se já passou
@@ -4206,38 +5782,240 @@ app.get('/api/expected-expenses', async (req, res) => {
       }
 
       // Buscar transações que correspondam a este gasto no mês atual
-      // Matching: nome similar na descrição E valor similar (tolerância de 5%)
-      const matchingTransactions = database.prepare(`
-        SELECT 
-          id,
-          date,
-          amount,
-          description,
-          category,
-          bank_name,
-          owner_name
-        FROM transactions
-        WHERE 
-          amount < 0
-          AND date >= date('${targetYear}-${String(targetMonth).padStart(2, '0')}-01')
-          AND date < date('${targetYear}-${String(targetMonth).padStart(2, '0')}-01', '+1 month')
-          AND (
-            LOWER(description) LIKE '%' || LOWER(?) || '%'
-            OR LOWER(description) LIKE '%' || LOWER(?) || '%'
-          )
-          AND ABS(amount) >= ? * 0.95
-          AND ABS(amount) <= ? * 1.05
-        ORDER BY date DESC
-        LIMIT 10
-      `).all(
-        expense.name,
-        expense.name.split(' ')[0], // Primeira palavra do nome
-        Math.abs(expense.amount),
-        Math.abs(expense.amount)
-      );
+      let matchingTransactions = [];
+      const expenseNameLower = expense.name.toLowerCase();
+      // Normalizar removendo acentos para comparação mais flexível
+      const expenseNameNormalized = expenseNameLower
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      
+      // Verificar se existe regra de validação para este gasto (com e sem acentos)
+      console.log(`\n[VALIDATION] ===== Verificando gasto: "${expense.name}" =====`);
+      console.log(`[VALIDATION] Lowercase: "${expenseNameLower}"`);
+      console.log(`[VALIDATION] Normalized: "${expenseNameNormalized}"`);
+      console.log(`[VALIDATION] Chaves disponíveis no rulesMap:`, Object.keys(rulesMap));
+      console.log(`[VALIDATION] Regra encontrada (com acentos)?`, rulesMap[expenseNameLower]);
+      console.log(`[VALIDATION] Regra encontrada (sem acentos)?`, rulesMap[expenseNameNormalized]);
+      
+      const ruleRecipients = rulesMap[expenseNameLower] || rulesMap[expenseNameNormalized];
+      const monthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+      let allMonthTransactions = []; // Declarar fora do if para poder usar depois
+      
+      if (ruleRecipients) {
+        // Validação baseada em regras: buscar transações para destinatários específicos
+        const recipients = ruleRecipients;
+        
+        console.log(`[VALIDATION] Buscando transações para "${expense.name}" com destinatários:`, recipients);
+        console.log(`[VALIDATION] Período: ${monthStart} até ${targetYear}-${String(targetMonth).padStart(2, '0')}-${new Date(targetYear, targetMonth, 0).getDate()}`);
+        
+        // Buscar todas as transações do mês primeiro
+        allMonthTransactions = database.prepare(`
+          SELECT 
+            id,
+            date,
+            amount,
+            description,
+            category,
+            bank_name,
+            owner_name
+          FROM transactions
+          WHERE 
+            amount < 0
+            AND date >= date(?)
+            AND date < date(?, '+1 month')
+          ORDER BY date DESC
+        `).all(monthStart, monthStart);
+        
+        console.log(`[VALIDATION] Total de transações do mês: ${allMonthTransactions.length}`);
+        if (allMonthTransactions.length > 0) {
+          console.log(`[VALIDATION] Primeiras 3 transações do mês:`, allMonthTransactions.slice(0, 3).map(tx => ({
+            description: tx.description,
+            amount: tx.amount,
+            date: tx.date
+          })));
+        }
+        
+        // Filtrar transações que contenham qualquer um dos destinatários na descrição
+        // Busca case-insensitive e flexível - buscar por partes do nome também
+        console.log(`[VALIDATION] Buscando transações com destinatários:`, recipients);
+        console.log(`[VALIDATION] Total de transações do mês para filtrar: ${allMonthTransactions.length}`);
+        
+        matchingTransactions = allMonthTransactions.filter(tx => {
+          const descLower = tx.description.toLowerCase();
+          // Normalizar descrição removendo espaços extras para buscar "F I A P" como "fiap"
+          const descNormalized = descLower.replace(/\s+/g, '');
+          
+          const matches = recipients.some(recipient => {
+            const recipientLower = recipient.toLowerCase().trim();
+            // Normalizar destinatário removendo espaços extras
+            const recipientNormalized = recipientLower.replace(/\s+/g, '');
+            
+            // Se o destinatário tem múltiplas palavras (ex: "Rodrigo Felipe")
+            // Buscar se ambas as palavras aparecem na descrição
+            const recipientWords = recipientLower.split(/\s+/).filter(w => w.length > 0);
+            
+            let found = false;
+            
+            if (recipientWords.length > 1) {
+              // Para nomes compostos, verificar se todas as palavras principais aparecem
+              // Considerar apenas palavras com mais de 2 caracteres
+              const mainWords = recipientWords.filter(w => w.length > 2);
+              if (mainWords.length > 0) {
+                // Verificar se todas as palavras principais estão na descrição
+                found = mainWords.every(word => {
+                  // Buscar palavra completa
+                  let wordFound = descLower.includes(word);
+                  if (!wordFound) {
+                    // Tentar sem acentos
+                    const normalizedDesc = descLower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    const normalizedWord = word.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    wordFound = normalizedDesc.includes(normalizedWord);
+                  }
+                  return wordFound;
+                });
+              }
+            }
+            
+            // Se não encontrou com busca por palavras, tentar busca completa
+            if (!found) {
+              found = descLower.includes(recipientLower);
+            }
+            
+            // Tentar busca normalizada (sem espaços) - útil para "F I A P" → "fiap"
+            if (!found) {
+              found = descNormalized.includes(recipientNormalized);
+            }
+            
+            if (!found) {
+              // Tentar buscar sem acentos e caracteres especiais
+              const normalizedDesc = descLower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              const normalizedRecipient = recipientLower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              found = normalizedDesc.includes(normalizedRecipient);
+            }
+            
+            // Tentar busca normalizada sem acentos também
+            if (!found) {
+              const normalizedDescNoSpaces = descNormalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              const normalizedRecipientNoSpaces = recipientNormalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              found = normalizedDescNoSpaces.includes(normalizedRecipientNoSpaces);
+            }
+            
+            // Se ainda não encontrou, tentar buscar por partes (mínimo 4 caracteres)
+            if (!found && recipientNormalized.length >= 4) {
+              // Tentar buscar pelos primeiros caracteres do nome (sem espaços)
+              const firstPart = recipientNormalized.substring(0, Math.min(recipientNormalized.length, 6));
+              found = descNormalized.includes(firstPart);
+            }
+            
+            if (found) {
+              console.log(`[VALIDATION] ✅ MATCH ENCONTRADO!`);
+              console.log(`[VALIDATION]   Descrição: "${tx.description}"`);
+              console.log(`[VALIDATION]   Destinatário buscado: "${recipient}"`);
+              console.log(`[VALIDATION]   Valor: R$ ${Math.abs(tx.amount).toFixed(2)}`);
+              console.log(`[VALIDATION]   Data: ${tx.date}`);
+            }
+            return found;
+          });
+          return matches;
+        }).slice(0, 50); // Limitar a 50 resultados
+        
+        console.log(`[VALIDATION] Encontradas ${matchingTransactions.length} transações correspondentes para "${expense.name}"`);
+        if (matchingTransactions.length > 0) {
+          console.log(`[VALIDATION] Transações encontradas:`, matchingTransactions.map(tx => ({
+            description: tx.description,
+            amount: tx.amount,
+            date: tx.date
+          })));
+        } else {
+          console.log(`[VALIDATION] ⚠️ Nenhuma transação encontrada. Verificando se há transações com descrições similares...`);
+          // Mostrar transações que contêm partes dos nomes
+          const partialMatches = allMonthTransactions.filter(tx => {
+            const descLower = tx.description.toLowerCase();
+            return recipients.some(recipient => {
+              // Buscar por pelo menos 3 caracteres do nome
+              if (recipient.length >= 3) {
+                return descLower.includes(recipient.substring(0, 3));
+              }
+              return false;
+            });
+          }).slice(0, 5);
+          if (partialMatches.length > 0) {
+            console.log(`[VALIDATION] Transações com descrições parcialmente similares:`, partialMatches.map(tx => ({
+              description: tx.description,
+              amount: tx.amount
+            })));
+          }
+        }
+      } else {
+        // Matching padrão: nome similar na descrição E valor similar (tolerância de 5%)
+        const monthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+        const firstWord = expense.name.split(' ')[0];
+        const amountAbs = Math.abs(expense.amount);
+        
+        matchingTransactions = database.prepare(`
+          SELECT 
+            id,
+            date,
+            amount,
+            description,
+            category,
+            bank_name,
+            owner_name
+          FROM transactions
+          WHERE 
+            amount < 0
+            AND date >= date(?)
+            AND date < date(?, '+1 month')
+            AND (
+              LOWER(description) LIKE '%' || LOWER(?) || '%'
+              OR LOWER(description) LIKE '%' || LOWER(?) || '%'
+            )
+            AND ABS(amount) >= ? * 0.95
+            AND ABS(amount) <= ? * 1.05
+          ORDER BY date DESC
+          LIMIT 10
+        `).all(
+          monthStart,
+          monthStart,
+          expense.name,
+          firstWord,
+          amountAbs,
+          amountAbs
+        );
+      }
 
-      // Considerar pago se encontrou pelo menos uma transação correspondente
-      const isPaid = matchingTransactions.length > 0;
+      // Calcular soma total das transações encontradas
+      const totalPaid = matchingTransactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+      
+      // Log final para debug
+      if (matchingTransactions.length > 0) {
+        console.log(`[VALIDATION] ✅ RESULTADO FINAL para "${expense.name}":`);
+        console.log(`[VALIDATION]   - Transações encontradas: ${matchingTransactions.length}`);
+        console.log(`[VALIDATION]   - Total pago: R$ ${totalPaid.toFixed(2)}`);
+        console.log(`[VALIDATION]   - Valor previsto: R$ ${expense.amount.toFixed(2)}`);
+        console.log(`[VALIDATION]   - Será marcado como pago: ${expense.is_paid === 1 || matchingTransactions.length > 0}`);
+      } else if (rulesMap[expenseNameLower] || rulesMap[expenseNameNormalized]) {
+        console.log(`[VALIDATION] ⚠️ NENHUMA transação encontrada para "${expense.name}" com regra de validação`);
+        console.log(`[VALIDATION]   - Destinatários esperados:`, rulesMap[expenseNameLower] || rulesMap[expenseNameNormalized]);
+        if (allMonthTransactions && allMonthTransactions.length > 0) {
+          console.log(`[VALIDATION]   - Total de transações do mês: ${allMonthTransactions.length}`);
+        }
+      }
+
+      // Buscar se foi marcado como pago manualmente para este período específico
+      const periodKey = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+      const manualPayment = database.prepare(`
+        SELECT is_paid FROM expected_expense_payments
+        WHERE expense_id = ? AND period = ?
+      `).get(expense.id, periodKey);
+      
+      const isPaidManuallyForPeriod = manualPayment && manualPayment.is_paid === 1;
+      
+      // Considerar pago se:
+      // 1. Foi marcado manualmente como pago PARA ESTE PERÍODO ESPECÍFICO, OU
+      // 2. Encontrou pelo menos uma transação correspondente no período
+      // NOTA: Não considerar is_paid global para períodos futuros ou passados
+      const isPaid = isPaidManuallyForPeriod || matchingTransactions.length > 0;
       const lastPaymentDate = matchingTransactions.length > 0 
         ? matchingTransactions[0].date 
         : null;
@@ -4245,7 +6023,7 @@ app.get('/api/expected-expenses', async (req, res) => {
         ? Math.abs(matchingTransactions[0].amount)
         : null;
 
-      return {
+      const result = {
         id: expense.id,
         name: expense.name,
         amount: expense.amount,
@@ -4256,8 +6034,10 @@ app.get('/api/expected-expenses', async (req, res) => {
         paymentMethod: expense.payment_method,
         isActive,
         isPaid,
+        isPaidManually: isPaidManuallyForPeriod,
         lastPaymentDate,
         lastPaymentAmount,
+        totalPaid,
         matchingTransactions: matchingTransactions.map(tx => ({
           id: tx.id,
           date: tx.date,
@@ -4270,7 +6050,25 @@ app.get('/api/expected-expenses', async (req, res) => {
         createdAt: expense.created_at,
         updatedAt: expense.updated_at
       };
+      
+      console.log(`[VALIDATION] Resultado para "${expense.name}":`, {
+        isPaid: result.isPaid,
+        totalPaid: result.totalPaid,
+        matchingCount: result.matchingTransactions.length
+      });
+      
+      return result;
     });
+
+    console.log(`[EXPECTED_EXPENSES] Total de gastos retornados: ${expensesWithStatus.length}`);
+    console.log(`[EXPECTED_EXPENSES] Gastos com transações encontradas:`, 
+      expensesWithStatus.filter(e => e.matchingTransactions.length > 0).map(e => ({
+        name: e.name,
+        isPaid: e.isPaid,
+        totalPaid: e.totalPaid,
+        transactions: e.matchingTransactions.length
+      }))
+    );
 
     res.json({ expenses: expensesWithStatus });
   } catch (error) {
@@ -4370,6 +6168,283 @@ app.delete('/api/expected-expenses/:id', (req, res) => {
   }
 });
 
+// Marcar gasto como pago/não pago para um período específico
+app.patch('/api/expected-expenses/:id/mark-paid', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { isPaid, period } = req.body;
+
+    // Determinar período atual se não especificado
+    let targetYear, targetMonth;
+    if (period && period !== 'all') {
+      const [year, month] = period.split('-').map(Number);
+      targetYear = year;
+      targetMonth = month;
+    } else {
+      const now = new Date();
+      targetYear = now.getFullYear();
+      targetMonth = now.getMonth() + 1;
+    }
+    
+    const periodKey = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+
+    // Verificar se o gasto existe
+    const expense = database.prepare('SELECT id FROM expected_expenses WHERE id = ?').get(id);
+    if (!expense) {
+      return res.status(404).json({ error: 'Gasto previsto não encontrado' });
+    }
+
+    // Inserir ou atualizar pagamento para este período específico
+    const result = database.prepare(`
+      INSERT INTO expected_expense_payments (expense_id, period, is_paid, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(expense_id, period) DO UPDATE SET
+        is_paid = ?,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(id, periodKey, isPaid ? 1 : 0, isPaid ? 1 : 0);
+
+    res.json({ 
+      success: true, 
+      message: isPaid ? `Gasto marcado como pago para ${periodKey}` : `Gasto marcado como não pago para ${periodKey}`
+    });
+  } catch (error) {
+    console.error('[EXPECTED_EXPENSES] Erro ao marcar como pago:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== REGRAS DE VALIDAÇÃO ==========
+app.get('/api/validation-rules', (req, res) => {
+  try {
+    const database = getDB();
+    const rules = database.prepare(`
+      SELECT id, expense_name, recipient_names, created_at, updated_at
+      FROM validation_rules
+      ORDER BY expense_name ASC
+    `).all();
+
+    res.json({ rules });
+  } catch (error) {
+    console.error('[VALIDATION_RULES] Erro ao buscar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/validation-rules', (req, res) => {
+  try {
+    const database = getDB();
+    const { expenseName, recipientNames } = req.body;
+
+    if (!expenseName || !recipientNames) {
+      return res.status(400).json({ error: 'Nome do gasto e destinatários são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      INSERT INTO validation_rules (expense_name, recipient_names, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+    `).run(expenseName, recipientNames);
+
+    res.json({ 
+      success: true, 
+      id: result.lastInsertRowid,
+      message: 'Regra de validação criada com sucesso'
+    });
+  } catch (error) {
+    if (error.message.includes('UNIQUE constraint')) {
+      return res.status(400).json({ error: 'Já existe uma regra para este gasto' });
+    }
+    console.error('[VALIDATION_RULES] Erro ao criar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/validation-rules/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+    const { expenseName, recipientNames } = req.body;
+
+    if (!expenseName || !recipientNames) {
+      return res.status(400).json({ error: 'Nome do gasto e destinatários são obrigatórios' });
+    }
+
+    const result = database.prepare(`
+      UPDATE validation_rules 
+      SET expense_name = ?,
+          recipient_names = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(expenseName, recipientNames, id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Regra de validação não encontrada' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Regra de validação atualizada com sucesso'
+    });
+  } catch (error) {
+    console.error('[VALIDATION_RULES] Erro ao atualizar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/validation-rules/:id', (req, res) => {
+  try {
+    const database = getDB();
+    const { id } = req.params;
+
+    const result = database.prepare('DELETE FROM validation_rules WHERE id = ?').run(id);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Regra de validação não encontrada' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Regra de validação deletada com sucesso'
+    });
+  } catch (error) {
+    console.error('[VALIDATION_RULES] Erro ao deletar:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Inserir regras padrão de validação
+app.post('/api/validation-rules/seed-defaults', (req, res) => {
+  try {
+    const database = getDB();
+    
+    const defaultRules = [
+      { expenseName: 'Aluguel', recipientNames: 'Coraci' },
+      { expenseName: 'Babá', recipientNames: 'Nicoly' },
+      { expenseName: 'Faxina', recipientNames: 'Ana Clara, Ana Paula, Rute, Ruth' },
+      { expenseName: 'Viagem', recipientNames: 'Gabrielle' },
+      { expenseName: 'Faculdade', recipientNames: 'FIAP, Fiap' },
+      { expenseName: 'Cabelo', recipientNames: 'Rodrigo Felipe' },
+      { expenseName: 'AirPods', recipientNames: 'Karina Mildenberg' },
+      { expenseName: 'Consultoria', recipientNames: 'Murillo Eduardo' },
+      { expenseName: 'Inglês', recipientNames: 'Moises, Izabella Mazzo' },
+      { expenseName: 'Ingles', recipientNames: 'Moises, Izabella Mazzo' }
+    ];
+
+    let inserted = 0;
+    let skipped = 0;
+
+    defaultRules.forEach(rule => {
+      try {
+        // Tentar inserir
+        database.prepare(`
+          INSERT INTO validation_rules (expense_name, recipient_names, updated_at)
+          VALUES (?, ?, CURRENT_TIMESTAMP)
+        `).run(rule.expenseName, rule.recipientNames);
+        inserted++;
+      } catch (error) {
+        if (error.message.includes('UNIQUE constraint')) {
+          // Se já existe, atualizar com os valores padrão
+          database.prepare(`
+            UPDATE validation_rules 
+            SET recipient_names = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE expense_name = ?
+          `).run(rule.recipientNames, rule.expenseName);
+          skipped++;
+        } else {
+          throw error;
+        }
+      }
+    });
+
+    res.json({ 
+      success: true, 
+      message: `${inserted} regra(s) inserida(s), ${skipped} já existente(s)`
+    });
+  } catch (error) {
+    console.error('[VALIDATION_RULES] Erro ao inserir regras padrão:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint de debug para testar validação
+app.get('/api/expected-expenses/debug/:expenseName', (req, res) => {
+  try {
+    const database = getDB();
+    const { expenseName } = req.params;
+    const { period } = req.query;
+    
+    // Determinar período
+    let targetYear, targetMonth;
+    if (period && period !== 'all') {
+      const [year, month] = period.split('-').map(Number);
+      targetYear = year;
+      targetMonth = month;
+    } else {
+      const now = new Date();
+      targetYear = now.getFullYear();
+      targetMonth = now.getMonth() + 1;
+    }
+    
+    // Buscar regra
+    const rule = database.prepare(`
+      SELECT expense_name, recipient_names
+      FROM validation_rules
+      WHERE LOWER(expense_name) = LOWER(?)
+    `).get(expenseName);
+    
+    if (!rule) {
+      return res.json({ 
+        found: false, 
+        message: `Nenhuma regra encontrada para "${expenseName}"`
+      });
+    }
+    
+    const recipients = rule.recipient_names.split(',').map(n => n.trim().toLowerCase());
+    const monthStart = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+    
+    // Buscar todas as transações do mês
+    const allTransactions = database.prepare(`
+      SELECT 
+        id,
+        date,
+        amount,
+        description,
+        category
+      FROM transactions
+      WHERE 
+        amount < 0
+        AND date >= date(?)
+        AND date < date(?, '+1 month')
+      ORDER BY date DESC
+    `).all(monthStart, monthStart);
+    
+    // Filtrar
+    const matches = allTransactions.filter(tx => {
+      const descLower = tx.description.toLowerCase();
+      return recipients.some(recipient => descLower.includes(recipient));
+    });
+    
+    res.json({
+      found: true,
+      rule: {
+        expenseName: rule.expense_name,
+        recipients: recipients
+      },
+      period: {
+        year: targetYear,
+        month: targetMonth,
+        start: monthStart
+      },
+      totalTransactions: allTransactions.length,
+      matchingTransactions: matches,
+      totalPaid: matches.reduce((sum, tx) => sum + Math.abs(tx.amount), 0)
+    });
+  } catch (error) {
+    console.error('[DEBUG] Erro:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Registrar todas as rotas antes de iniciar o servidor
 console.log('📋 Rotas registradas:');
 console.log('  GET  /api/pluggy/connectors');
@@ -4384,9 +6459,11 @@ console.log('  POST /api/expected-expenses');
 console.log('  GET  /api/pluggy/item/:itemId');
 console.log('  POST /api/pluggy/item/:itemId/mfa');
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`🚀 Servidor também disponível em http://flux.local:${PORT}`);
   console.log(`📊 API disponível em http://localhost:${PORT}/api`);
+  console.log(`📊 API também disponível em http://flux.local:${PORT}/api`);
   console.log(`💾 Banco de dados em: ${getDbPath()}`);
 }).on('error', (error) => {
   if (error.code === 'EADDRINUSE') {

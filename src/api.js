@@ -1,9 +1,25 @@
 // API client para comunicação com o servidor backend
-const API_BASE = 'http://localhost:3000/api';
+// Detectar automaticamente o domínio (localhost ou flux.local)
+const getApiBase = () => {
+  if (typeof window === 'undefined') {
+    // Server-side rendering ou ambiente sem window
+    return 'http://localhost:3000/api';
+  }
+  
+  const hostname = window.location.hostname;
+  const port = '3000'; // Porta fixa do servidor backend
+  
+  // Se estiver acessando via flux.local, usar flux.local para a API também
+  if (hostname === 'flux.local' || hostname.includes('flux.local')) {
+    return `http://flux.local:${port}/api`;
+  }
+  return `http://localhost:${port}/api`;
+};
 
 export const api = {
   // Dashboard
   getDashboard: async (filters = {}) => {
+    const API_BASE = getApiBase();
     const params = new URLSearchParams();
     if (filters.period && filters.period !== 'all') params.append('period', filters.period);
     if (filters.accountType && filters.accountType !== 'all') params.append('accountType', filters.accountType);
@@ -37,6 +53,7 @@ export const api = {
   },
 
   updateCredential: async (id, credential) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/credentials/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -50,6 +67,7 @@ export const api = {
   },
 
   deleteCredential: async (id) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/credentials/${id}`, {
       method: 'DELETE',
     });
@@ -71,6 +89,7 @@ export const api = {
 
   // Pluggy
   getPluggyToken: async (credentialId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -109,6 +128,7 @@ export const api = {
   },
 
   createItem: async (connectorId, parameters, credentialId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy/create-item`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -134,6 +154,7 @@ export const api = {
   },
 
   executeMFA: async (itemId, mfa, credentialId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy/item/${itemId}/mfa`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -178,6 +199,7 @@ export const api = {
 
   // Transações
   updateCategory: async (transactionId, category) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/${transactionId}/category`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -202,6 +224,7 @@ export const api = {
   },
 
   deleteTransactionsBySource: async (source) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/by-source/${source}`, {
       method: 'DELETE',
     });
@@ -228,6 +251,7 @@ export const api = {
 
   // Gerenciar Items Salvos (Contas Conectadas)
   getSavedPluggyItems: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy-items`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -253,6 +277,7 @@ export const api = {
   },
 
   updateSavedPluggyItem: async (id, item) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy-items/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -277,6 +302,7 @@ export const api = {
   },
 
   clearAllTransactions: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/clear-all`, {
       method: 'DELETE',
     });
@@ -289,6 +315,7 @@ export const api = {
 
   // Buscar saldos reais das contas e faturas do período
   getRealBalances: async (period = null) => {
+    const API_BASE = getApiBase();
     const params = period ? `?period=${period}` : '';
     const response = await fetch(`${API_BASE}/pluggy/real-balances${params}`);
     if (!response.ok) {
@@ -309,6 +336,7 @@ export const api = {
   },
 
   createLoan: async (loan) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -335,6 +363,7 @@ export const api = {
   },
 
   deleteLoan: async (id) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans/${id}`, {
       method: 'DELETE',
     });
@@ -346,6 +375,7 @@ export const api = {
   },
 
   addLoanTransaction: async (loanId, transaction) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans/${loanId}/transactions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -359,6 +389,7 @@ export const api = {
   },
 
   deleteLoanTransaction: async (loanId, transactionId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans/${loanId}/transactions/${transactionId}`, {
       method: 'DELETE',
     });
@@ -371,6 +402,7 @@ export const api = {
 
   // Metas
   getGoals: async (period = '') => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/goals${period}`);
     if (!response.ok) {
       const error = await response.json();
@@ -380,6 +412,7 @@ export const api = {
   },
 
   createGoal: async (goal) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/goals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -406,6 +439,7 @@ export const api = {
   },
 
   deleteGoal: async (id) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/goals/${id}`, {
       method: 'DELETE',
     });
@@ -418,6 +452,7 @@ export const api = {
 
   // Corrigir transações com legumes de Refeição para Feira
   fixLegumesCategory: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/fix-legumes`, {
       method: 'POST',
     });
@@ -430,6 +465,7 @@ export const api = {
 
   // Corrigir transações relacionadas a mercado para Mercado
   fixMercadoCategory: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/fix-mercado`, {
       method: 'POST',
     });
@@ -442,6 +478,7 @@ export const api = {
 
   // Corrigir transações de Mercado Livre que foram incorretamente categorizadas como Mercado
   fixMercadoLivreCategory: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/fix-mercado-livre`, {
       method: 'POST',
     });
@@ -452,8 +489,22 @@ export const api = {
     return response.json();
   },
 
+  // Corrigir transações de farmácia que foram incorretamente categorizadas (ex: Moradia)
+  fixFarmaciaCategory: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/transactions/fix-farmacia`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao corrigir categorias de farmácia');
+    }
+    return response.json();
+  },
+
   // Gastos Previstos
   getExpectedExpenses: async (period = '') => {
+    const API_BASE = getApiBase();
     const url = period ? `${API_BASE}/expected-expenses?period=${period}` : `${API_BASE}/expected-expenses`;
     const response = await fetch(url);
     if (!response.ok) {
@@ -463,7 +514,59 @@ export const api = {
     return response.json();
   },
 
+  markExpectedExpenseAsPaid: async (id, isPaid, period = '') => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/expected-expenses/${id}/mark-paid`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isPaid, period }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao marcar gasto como pago');
+    }
+    return response.json();
+  },
+
+  // Regras de Validação
+  getValidationRules: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/validation-rules`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar regras de validação');
+    }
+    return response.json();
+  },
+
+  createValidationRule: async (expenseName, recipientNames) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/validation-rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expenseName, recipientNames }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar regra de validação');
+    }
+    return response.json();
+  },
+
+  seedDefaultValidationRules: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/validation-rules/seed-defaults`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao inserir regras padrão');
+    }
+    return response.json();
+  },
+
   createExpectedExpense: async (expense) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/expected-expenses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -477,6 +580,7 @@ export const api = {
   },
 
   updateExpectedExpense: async (id, expense) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/expected-expenses/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -490,12 +594,231 @@ export const api = {
   },
 
   deleteExpectedExpense: async (id) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/expected-expenses/${id}`, {
       method: 'DELETE',
     });
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Erro ao deletar gasto previsto');
+    }
+    return response.json();
+  },
+
+  // Financial Goals (Novas Metas)
+  getFinancialGoals: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/financial-goals`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar metas financeiras');
+    }
+    return response.json();
+  },
+
+  createFinancialGoal: async (goal) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/financial-goals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(goal),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar meta financeira');
+    }
+    return response.json();
+  },
+
+  updateFinancialGoal: async (id, goal) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/financial-goals/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(goal),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar meta financeira');
+    }
+    return response.json();
+  },
+
+  deleteFinancialGoal: async (id) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/financial-goals/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar meta financeira');
+    }
+    return response.json();
+  },
+
+  // Análises Avançadas
+  getPeriodComparison: async (type = 'month') => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/analytics/period-comparison?type=${type}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao comparar períodos');
+    }
+    return response.json();
+  },
+
+  getEvolution: async (type = 'month', months = 12) => {
+    const response = await fetch(`${API_BASE}/analytics/evolution?type=${type}&months=${months}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar evolução');
+    }
+    return response.json();
+  },
+
+  getProjection: async (months = 6) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/analytics/projection?months=${months}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao calcular projeção');
+    }
+    return response.json();
+  },
+
+  getTrends: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/analytics/trends`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao analisar tendências');
+    }
+    return response.json();
+  },
+
+  getHealth: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/analytics/health`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao calcular saúde financeira');
+    }
+    return response.json();
+  },
+
+  // Transações Recorrentes
+  detectRecurringTransactions: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/recurring-transactions/detect`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao detectar transações recorrentes');
+    }
+    return response.json();
+  },
+
+  getRecurringTransactions: async () => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/recurring-transactions`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar transações recorrentes');
+    }
+    return response.json();
+  },
+
+  createRecurringTransaction: async (recurring) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/recurring-transactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(recurring),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar transação recorrente');
+    }
+    return response.json();
+  },
+
+  updateRecurringTransaction: async (id, recurring) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/recurring-transactions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(recurring),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar transação recorrente');
+    }
+    return response.json();
+  },
+
+  deleteRecurringTransaction: async (id) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/recurring-transactions/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar transação recorrente');
+    }
+    return response.json();
+  },
+
+  // Calendário de Vencimentos
+  getDueDates: async (month, year) => {
+    const API_BASE = getApiBase();
+    const params = new URLSearchParams();
+    if (month) params.append('month', month);
+    if (year) params.append('year', year);
+    const url = `${API_BASE}/due-dates${params.toString() ? '?' + params.toString() : ''}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao buscar vencimentos');
+    }
+    return response.json();
+  },
+
+  createDueDate: async (dueDate) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/due-dates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(dueDate),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao criar vencimento');
+    }
+    return response.json();
+  },
+
+  updateDueDate: async (id, dueDate) => {
+    const response = await fetch(`${API_BASE}/due-dates/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(dueDate),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao atualizar vencimento');
+    }
+    return response.json();
+  },
+
+  deleteDueDate: async (id) => {
+    const API_BASE = getApiBase();
+    const response = await fetch(`${API_BASE}/due-dates/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Erro ao deletar vencimento');
     }
     return response.json();
   },
