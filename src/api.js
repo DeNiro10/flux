@@ -34,12 +34,14 @@ export const api = {
 
   // Credenciais Pluggy
   getCredentials: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/credentials`);
     if (!response.ok) throw new Error('Erro ao listar credenciais');
     return response.json();
   },
 
   createCredential: async (credential) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/credentials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,6 +81,7 @@ export const api = {
   },
 
   getActiveCredential: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/credentials/active`);
     if (!response.ok) {
       if (response.status === 404) return null;
@@ -104,6 +107,7 @@ export const api = {
 
   // Alternativa: API direta (sem widget)
   getConnectors: async (credentialId) => {
+    const API_BASE = getApiBase();
     const url = `${API_BASE}/pluggy/connectors${credentialId ? `?credential_id=${credentialId}` : ''}`;
     console.log('[API] Buscando conectores em:', url);
     const response = await fetch(url, {
@@ -142,6 +146,7 @@ export const api = {
   },
 
   getItem: async (itemId, credentialId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy/item/${itemId}?credential_id=${credentialId || ''}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -168,6 +173,7 @@ export const api = {
   },
 
   syncPluggy: async (itemId, credentialId) => {
+    const API_BASE = getApiBase();
     console.log('[API] Sincronizando Pluggy');
     console.log('[API] itemId:', itemId);
     console.log('[API] credentialId:', credentialId);
@@ -213,6 +219,7 @@ export const api = {
   },
 
   deleteTransaction: async (transactionId) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/transactions/${transactionId}`, {
       method: 'DELETE',
     });
@@ -237,6 +244,7 @@ export const api = {
 
   // Listar items (conexões) existentes no Pluggy
   getPluggyItems: async (credentialId) => {
+    const API_BASE = getApiBase();
     const url = `${API_BASE}/pluggy/items${credentialId ? `?credential_id=${credentialId}` : ''}`;
     const response = await fetch(url, {
       method: 'GET',
@@ -264,6 +272,7 @@ export const api = {
   },
 
   createSavedPluggyItem: async (item) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy-items`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -291,6 +300,7 @@ export const api = {
   },
 
   deleteSavedPluggyItem: async (id) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/pluggy-items/${id}`, {
       method: 'DELETE',
     });
@@ -428,6 +438,7 @@ export const api = {
   },
 
   updateGoal: async (id, goal) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/goals/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -670,6 +681,7 @@ export const api = {
   },
 
   getEvolution: async (type = 'month', months = 12) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/analytics/evolution?type=${type}&months=${months}`);
     if (!response.ok) {
       const error = await response.json();
@@ -801,6 +813,7 @@ export const api = {
   },
 
   updateDueDate: async (id, dueDate) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/due-dates/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
