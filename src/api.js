@@ -327,6 +327,7 @@ export const api = {
 
   // Empréstimos
   getLoans: async () => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans`);
     if (!response.ok) {
       const error = await response.json();
@@ -350,6 +351,7 @@ export const api = {
   },
 
   updateLoan: async (id, loan) => {
+    const API_BASE = getApiBase();
     const response = await fetch(`${API_BASE}/loans/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
