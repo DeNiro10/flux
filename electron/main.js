@@ -178,12 +178,12 @@ ipcMain.handle('sync-pluggy', async (event, itemId) => {
     // Para cada conta, buscar transações
     for (const account of accounts) {
       try {
-        const transactionsResponse = await pluggyClient.fetchTransactions(account.id);
-        // A API pode retornar { results: [...] } ou array direto
-        const transactions = transactionsResponse?.results || transactionsResponse || [];
+        // fetchTransactions já retorna um array diretamente
+        const transactions = await pluggyClient.fetchTransactions(account.id);
+        const transactionsArray = Array.isArray(transactions) ? transactions : [];
         
-        if (transactions && transactions.length > 0) {
-          const synced = await syncTransactions(transactions, account.id);
+        if (transactionsArray && transactionsArray.length > 0) {
+          const synced = await syncTransactions(transactionsArray, account.id);
           totalSynced += synced;
         }
       } catch (error) {
