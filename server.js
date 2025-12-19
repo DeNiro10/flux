@@ -1387,22 +1387,26 @@ app.post('/api/pluggy/sync', async (req, res) => {
         console.log(`[SERVER] Sincronizando conta: ${account.name || account.type} (${account.id})`);
         console.log(`[SERVER] Tipo da conta: ${account.type}`);
         
-        const transactionsResponse = await pluggyClient.fetchTransactions(account.id);
-        const transactions = transactionsResponse?.results || transactionsResponse || [];
-
-        console.log(`[SERVER] Transações encontradas: ${transactions.length}`);
+        // fetchTransactions já retorna um array diretamente (não precisa acessar .results)
+        const transactions = await pluggyClient.fetchTransactions(account.id);
         
-        if (transactions.length > 0) {
+        // Garantir que é um array
+        const transactionsArray = Array.isArray(transactions) ? transactions : [];
+
+        console.log(`[SERVER] Transações encontradas: ${transactionsArray.length}`);
+        
+        if (transactionsArray.length > 0) {
           // Determinar o tipo de conta (BANK = conta corrente, CREDIT = cartão de crédito)
           const accountType = account.type || 'BANK';
           
-          const synced = await syncTransactions(transactions, account.id, {
+          console.log(`[SERVER] Sincronizando ${transactionsArray.length} transações...`);
+          const synced = await syncTransactions(transactionsArray, account.id, {
             accountType: accountType,
             bankName: bankName,
             ownerName: ownerName,
           });
           totalSynced += synced;
-          console.log(`[SERVER] ✅ ${synced} transações sincronizadas da conta ${account.name || account.type}`);
+          console.log(`[SERVER] ✅ ${synced} transações sincronizadas da conta ${account.name || account.type} (${transactionsArray.length - synced} duplicadas ignoradas)`);
         } else {
           console.log(`[SERVER] ℹ️ Nenhuma transação para sincronizar na conta ${account.name || account.type}`);
         }
