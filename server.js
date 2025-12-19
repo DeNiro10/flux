@@ -268,7 +268,7 @@ const CATEGORY_RULES = {
   
   // FARMÁCIA
   farmacia: {
-    keywords: ['farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'drogasil', 'pague menos', 'ultrafarma', 'panvel']
+    keywords: ['farmácia', 'farmacia', 'drogaria', 'raia', 'droga raia', 'drogasil', 'pague menos', 'ultrafarma', 'panvel', 'drogaria', 'farmácia popular', 'farmacia popular', 'farmácia de manipulação', 'farmacia de manipulacao', 'farmácia e drogaria', 'farmacia e drogaria', 'droga raia raia', 'raia drogas', 'drogasil drogasil', 'farmácia santa', 'farmacia santa', 'farmácia são paulo', 'farmacia sao paulo', 'farmácia nossa senhora', 'farmacia nossa senhora', 'farmácia nossa', 'farmacia nossa', 'farmácia bela vista', 'farmacia bela vista', 'farmácia central', 'farmacia central', 'farmácia 24h', 'farmacia 24h', 'farmácia 24 horas', 'farmacia 24 horas']
   },
   
   // SAÚDE
@@ -335,9 +335,10 @@ function categorize(description, amount = 0, date = null) {
   }
   
   // 1. Primeiro, verificar regras estáticas inteligentes
-  // Ordem importa: verificar Compras antes de Mercado para pegar "mercado livre" primeiro
+  // Ordem importa: verificar Farmácia ANTES de Moradia para evitar conflitos
+  // Exemplo: "Droga Raia" não deve ser categorizado como Moradia
   const orderedCategories = [
-    'renda', 'alimentacao', 'transporte', 'moradia', 'feira', 'farmacia', 'saude', 
+    'renda', 'alimentacao', 'transporte', 'farmacia', 'moradia', 'feira', 'saude', 
     'compras', 'mercado', // Compras antes de Mercado
     'entretenimento', 'educacao', 'servicos', 'pet', 'transferencia', 
     'investimentos', 'fatura', 'emprestimo'
