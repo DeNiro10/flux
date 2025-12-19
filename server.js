@@ -2168,7 +2168,7 @@ app.post('/api/transactions/fix-localiza', (req, res) => {
   }
 });
 
-// Endpoint para atualizar transações de farmácia de Saúde para Farmácia
+// Endpoint para atualizar transações de farmácia de Moradia/Saúde para Farmácia
 app.post('/api/transactions/fix-farmacia', (req, res) => {
   try {
     const database = getDB();
