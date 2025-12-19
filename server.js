@@ -1184,6 +1184,7 @@ function getDashboardData(filters = {}) {
         
         // Filtrar créditos que devem ser excluídos
         let creditosToCount = 0;
+        let runningSum = 0; // Para verificar múltiplos pagamentos que somam a fatura
         for (const credito of allCreditos) {
           const creditoDate = new Date(credito.date);
           const creditoDay = creditoDate.getDate();
