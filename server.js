@@ -2078,7 +2078,7 @@ app.post('/api/transactions/fix-mercado', (req, res) => {
       
       // Pular se for "Mercado Livre" ou variações (devem continuar em Compras)
       const mercadoLivreVariations = ['mercado livre', 'mercadolivre', 'mercadol'];
-      if (mercadolivreVariations.some(variation => descLower.includes(variation))) {
+      if (mercadoLivreVariations.some(variation => descLower.includes(variation))) {
         continue;
       }
       
@@ -2087,7 +2087,7 @@ app.post('/api/transactions/fix-mercado', (req, res) => {
       
       // Também verificar se contém apenas "mercado" (mas não variações de Mercado Livre)
       const hasMercadoOnly = descLower.includes('mercado') && 
-                             !mercadolivreVariations.some(variation => descLower.includes(variation));
+                             !mercadoLivreVariations.some(variation => descLower.includes(variation));
       
       if (hasMercadoKeyword || hasMercadoOnly) {
         updateStmt.run('Mercado', tx.id);
