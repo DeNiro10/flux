@@ -334,6 +334,13 @@ function categorize(description, amount = 0, date = null) {
     return 'Compras';
   }
   
+  // 0.1. Verificação especial: Farmácias devem ir para Farmácia (ANTES de verificar Moradia)
+  // Isso evita que "Raia Drogasil", "Droga Raia" sejam categorizadas como Moradia
+  const farmaciaKeywords = ['raia', 'drogasil', 'droga raia', 'drogaria', 'farmácia', 'farmacia', 'pague menos', 'ultrafarma', 'panvel'];
+  if (farmaciaKeywords.some(keyword => descriptionLower.includes(keyword))) {
+    return 'Farmácia';
+  }
+  
   // 1. Primeiro, verificar regras estáticas inteligentes
   // Ordem importa: verificar Farmácia ANTES de Moradia para evitar conflitos
   // Exemplo: "Droga Raia" não deve ser categorizado como Moradia
