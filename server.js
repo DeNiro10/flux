@@ -1128,37 +1128,91 @@ function getDashboardData(filters = {}) {
         
         const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
         
-        // Créditos do período atual, EXCLUINDO pagamentos que correspondem à fatura anterior
+        // Calcular primeiro dia útil do mês atual para excluir pagamentos nesse dia
+        const firstBusinessDay = getFirstBusinessDay(year, month);
+        const firstBusinessDayStr = `${year}-${String(month).padStart(2, '0')}-${String(firstBusinessDay).padStart(2, '0')}`;
+        
+        // Para Larissa, também excluir pagamentos no dia de fechamento da fatura
+        let closingDayStr = null;
+        if (card.owner_name === 'Larissa Purkot') {
+          let cycleEndDay;
+          if (card.bank_name === 'Itaú') {
+            cycleEndDay = 26; // Itaú Larissa fecha dia 26
+          } else if (card.bank_name === 'Nubank') {
+            cycleEndDay = 26; // Nubank Larissa fecha dia 26
+          }
+          if (cycleEndDay) {
+            closingDayStr = `${year}-${String(month).padStart(2, '0')}-${String(cycleEndDay).padStart(2, '0')}`;
+          }
+        }
+        
+        // Construir condições de exclusão
+        let excludeConditions = [];
+        let excludeParams = [];
+        
+        // Sempre excluir primeiro dia útil
+        excludeConditions.push('NOT (date >= ? AND date < ?)');
+        excludeParams.push(firstBusinessDayStr + 'T00:00:00', firstBusinessDayStr + 'T23:59:59');
+        
+        // Para Larissa, também excluir dia de fechamento
+        if (closingDayStr) {
+          excludeConditions.push('NOT (date >= ? AND date < ?)');
+          excludeParams.push(closingDayStr + 'T00:00:00', closingDayStr + 'T23:59:59');
+        }
+        
+        // Excluir pagamentos que correspondem à fatura anterior
         if (prevBillAmount > 0) {
           const minAmount = prevBillAmount - tolerance;
           const maxAmount = prevBillAmount + tolerance;
-          
-          const creditosCard = database.prepare(`
-            SELECT SUM(amount) as total FROM transactions 
-            WHERE account_type = 'CREDIT' 
-              AND bank_name = ? 
-              AND owner_name = ?
-              AND amount > 0 
-              AND date >= ? 
-              AND date <= ?
-              AND description NOT LIKE '%Pagamento recebido%'
-              AND NOT (ABS(amount) >= ? AND ABS(amount) <= ?)
-          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end, minAmount, maxAmount);
-          totalCreditos += creditosCard?.total || 0;
-        } else {
-          // Se não há fatura anterior, contar todos os créditos (exceto "Pagamento recebido")
-          const creditosCard = database.prepare(`
-            SELECT SUM(amount) as total FROM transactions 
-            WHERE account_type = 'CREDIT' 
-              AND bank_name = ? 
-              AND owner_name = ?
-              AND amount > 0 
-              AND date >= ? 
-              AND date <= ?
-              AND description NOT LIKE '%Pagamento recebido%'
-          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
-          totalCreditos += creditosCard?.total || 0;
+          excludeConditions.push('NOT (ABS(amount) >= ? AND ABS(amount) <= ?)');
+          excludeParams.push(minAmount, maxAmount);
         }
+        
+        // Buscar TODOS os créditos do período para verificar múltiplos pagamentos
+        const allCreditos = database.prepare(`
+          SELECT date, amount, description
+          FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount > 0 
+            AND date >= ? 
+            AND date <= ?
+            AND description NOT LIKE '%Pagamento recebido%'
+          ORDER BY date ASC
+        `).all(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+        
+        // Filtrar créditos que devem ser excluídos
+        let creditosToCount = 0;
+        for (const credito of allCreditos) {
+          const creditoDate = new Date(credito.date);
+          const creditoDay = creditoDate.getDate();
+          const creditoAmount = Math.abs(credito.amount);
+          
+          // Verificar se está no primeiro dia útil
+          if (creditoDay === firstBusinessDay) {
+            continue; // Ignorar
+          }
+          
+          // Verificar se está no dia de fechamento (para Larissa)
+          if (closingDayStr && credito.date >= closingDayStr + 'T00:00:00' && credito.date < closingDayStr + 'T23:59:59') {
+            continue; // Ignorar
+          }
+          
+          // Verificar se corresponde à fatura anterior
+          if (prevBillAmount > 0) {
+            const minAmount = prevBillAmount - tolerance;
+            const maxAmount = prevBillAmount + tolerance;
+            if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
+              continue; // Ignorar - corresponde à fatura anterior
+            }
+          }
+          
+          // Se passou por todas as verificações, contar
+          creditosToCount += credito.amount;
+        }
+        
+        totalCreditos += creditosToCount;
       }
       
       // Fatura total = Gastos - Créditos (excluindo pagamentos de fatura anterior)
@@ -1229,36 +1283,88 @@ function getDashboardData(filters = {}) {
         
         const prevBillAmount = (prevGastos?.total || 0) - (prevCreditos?.total || 0);
         
-        // Créditos do período atual, EXCLUINDO pagamentos que correspondem à fatura anterior
-        if (prevBillAmount > 0) {
-          const minAmount = prevBillAmount - tolerance;
-          const maxAmount = prevBillAmount + tolerance;
-          
-          const creditosCard = database.prepare(`
-            SELECT SUM(amount) as total FROM transactions 
-            WHERE account_type = 'CREDIT' 
-              AND bank_name = ? 
-              AND owner_name = ?
-              AND amount > 0 
-              AND date >= ? 
-              AND date <= ?
-              AND description NOT LIKE '%Pagamento recebido%'
-              AND NOT (ABS(amount) >= ? AND ABS(amount) <= ?)
-          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end, minAmount, maxAmount);
-          totalCreditos += creditosCard?.total || 0;
-        } else {
-          const creditosCard = database.prepare(`
-            SELECT SUM(amount) as total FROM transactions 
-            WHERE account_type = 'CREDIT' 
-              AND bank_name = ? 
-              AND owner_name = ?
-              AND amount > 0 
-              AND date >= ? 
-              AND date <= ?
-              AND description NOT LIKE '%Pagamento recebido%'
-          `).get(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
-          totalCreditos += creditosCard?.total || 0;
+        // Calcular primeiro dia útil do mês atual para excluir pagamentos nesse dia
+        const firstBusinessDay = getFirstBusinessDay(currentYear, currentMonth);
+        const firstBusinessDayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(firstBusinessDay).padStart(2, '0')}`;
+        
+        // Para Larissa, também excluir pagamentos no dia de fechamento da fatura
+        let closingDayStr = null;
+        if (card.owner_name === 'Larissa Purkot') {
+          let cycleEndDay;
+          if (card.bank_name === 'Itaú') {
+            cycleEndDay = 26; // Itaú Larissa fecha dia 26
+          } else if (card.bank_name === 'Nubank') {
+            cycleEndDay = 26; // Nubank Larissa fecha dia 26
+          }
+          if (cycleEndDay) {
+            closingDayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(cycleEndDay).padStart(2, '0')}`;
+          }
         }
+        
+        // Buscar TODOS os créditos do período para verificar múltiplos pagamentos
+        const allCreditos = database.prepare(`
+          SELECT date, amount, description
+          FROM transactions 
+          WHERE account_type = 'CREDIT' 
+            AND bank_name = ? 
+            AND owner_name = ?
+            AND amount > 0 
+            AND date >= ? 
+            AND date <= ?
+            AND description NOT LIKE '%Pagamento recebido%'
+          ORDER BY date ASC
+        `).all(card.bank_name, card.owner_name, cardCycle.start, cardCycle.end);
+        
+        // Filtrar créditos que devem ser excluídos
+        let creditosToCount = 0;
+        let runningSum = 0; // Para verificar múltiplos pagamentos que somam a fatura
+        
+        for (const credito of allCreditos) {
+          const creditoDate = new Date(credito.date);
+          const creditoDay = creditoDate.getDate();
+          const creditoAmount = Math.abs(credito.amount);
+          
+          // Verificar se está no primeiro dia útil
+          if (creditoDay === firstBusinessDay) {
+            continue; // Ignorar
+          }
+          
+          // Verificar se está no dia de fechamento (para Larissa)
+          if (closingDayStr && credito.date >= closingDayStr + 'T00:00:00' && credito.date < closingDayStr + 'T23:59:59') {
+            continue; // Ignorar
+          }
+          
+          // Verificar se corresponde à fatura anterior (pagamento único)
+          if (prevBillAmount > 0) {
+            const minAmount = prevBillAmount - tolerance;
+            const maxAmount = prevBillAmount + tolerance;
+            if (creditoAmount >= minAmount && creditoAmount <= maxAmount) {
+              continue; // Ignorar - corresponde à fatura anterior
+            }
+            
+            // Verificar se múltiplos pagamentos somam o valor da fatura anterior
+            runningSum += creditoAmount;
+            if (runningSum >= minAmount && runningSum <= maxAmount) {
+              // Se a soma atual corresponde à fatura, ignorar este e os anteriores
+              creditosToCount = 0; // Resetar contagem
+              runningSum = 0;
+              continue;
+            } else if (runningSum > maxAmount) {
+              // Se ultrapassou, resetar e contar apenas o excedente
+              const excess = runningSum - maxAmount;
+              creditosToCount = excess;
+              runningSum = excess;
+            } else {
+              // Ainda não chegou no valor da fatura, continuar acumulando
+              creditosToCount += credito.amount;
+            }
+          } else {
+            // Se não há fatura anterior, contar normalmente
+            creditosToCount += credito.amount;
+          }
+        }
+        
+        totalCreditos += creditosToCount;
       }
       
       creditCardBill = totalGastos - totalCreditos;
