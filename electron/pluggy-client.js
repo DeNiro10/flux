@@ -294,6 +294,26 @@ export class PluggyClient {
     return response.results || response.data || response;
   }
 
+  async fetchSecurities(itemId) {
+    try {
+      console.log(`[PluggyClient] Buscando securities para itemId: ${itemId}`);
+      const response = await this.request(`/securities?itemId=${itemId}`);
+      console.log(`[PluggyClient] Resposta de securities:`, JSON.stringify(response, null, 2));
+      // A API pode retornar { results: [...] } ou array direto
+      const securities = response.results || response.data || response || [];
+      console.log(`[PluggyClient] Total de securities encontradas: ${Array.isArray(securities) ? securities.length : 0}`);
+      return securities;
+    } catch (error) {
+      console.error('[PluggyClient] Erro ao buscar securities:', error.message);
+      console.error('[PluggyClient] Stack:', error.stack);
+      // Se o endpoint não existir (404), retornar array vazio
+      if (error.message.includes('404') || error.message.includes('Not Found')) {
+        console.log('[PluggyClient] Endpoint /securities não encontrado (pode não estar disponível)');
+      }
+      return [];
+    }
+  }
+
   async fetchTransactions(accountId, options = {}) {
     let allTransactions = [];
     let page = 1;

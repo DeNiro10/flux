@@ -171,6 +171,7 @@ function getDB() {
         current_amount REAL DEFAULT 0,
         description TEXT,
         target_date TEXT,
+        tag TEXT,
         is_completed INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -295,6 +296,19 @@ function getDB() {
         // SQLite não permite ALTER COLUMN diretamente, então vamos garantir que novos registros funcionem
       } catch (migrationError) {
         console.error('[DB] Erro na migração da tabela goals:', migrationError);
+      }
+
+      // Migração: adicionar coluna tag à tabela financial_goals se não existir
+      try {
+        const financialGoalsTableInfo = db.prepare("PRAGMA table_info(financial_goals)").all();
+        const financialGoalsColumnNames = financialGoalsTableInfo.map(col => col.name);
+        
+        if (!financialGoalsColumnNames.includes('tag')) {
+          db.prepare("ALTER TABLE financial_goals ADD COLUMN tag TEXT").run();
+          console.log('[DB] Coluna tag adicionada à tabela financial_goals');
+        }
+      } catch (migrationError) {
+        console.error('[DB] Erro na migração da tabela financial_goals:', migrationError);
       }
     } catch (dbError) {
       console.error('[DB] Erro ao criar banco:', dbError);
@@ -1940,6 +1954,25 @@ app.post('/api/pluggy/sync', async (req, res) => {
     const accounts = accountsResponse?.results || accountsResponse || [];
 
     console.log('[SERVER] Contas encontradas:', accounts.length);
+    
+    // Log COMPLETO de TODAS as contas para debug
+    console.log('[SERVER] ===== TODAS AS CONTAS RETORNADAS PELA PLUGGY =====');
+    accounts.forEach((acc, idx) => {
+      console.log(`[SERVER] Conta ${idx + 1}:`, JSON.stringify({
+        id: acc.id,
+        name: acc.name,
+        type: acc.type,
+        subtype: acc.subtype,
+        balance: acc.balance,
+        value: acc.value,
+        amount: acc.amount,
+        number: acc.number,
+        currencyCode: acc.currencyCode,
+        status: acc.status,
+      }, null, 2));
+    });
+    console.log('[SERVER] ===================================================');
+    
     if (accounts.length > 0) {
       console.log('[SERVER] Primeira conta:', accounts[0].name || accounts[0].type);
     }
@@ -1955,7 +1988,25 @@ app.post('/api/pluggy/sync', async (req, res) => {
     for (const account of accounts) {
       try {
         console.log(`[SERVER] Sincronizando conta: ${account.name || account.type} (${account.id})`);
-        console.log(`[SERVER] Tipo da conta: ${account.type}`);
+        console.log(`[SERVER] Tipo da conta: ${account.type}, Subtype: ${account.subtype}`);
+        
+        // Verificar se é investimento e pular (investimentos não têm transações)
+        const isInvestment = 
+          account.type === 'FIXED_INCOME' ||
+          account.type === 'MUTUAL_FUND' ||
+          account.type === 'INVESTMENT' ||
+          account.subtype === 'CDB' ||
+          account.subtype === 'INVESTMENT_FUND' ||
+          account.type?.toUpperCase() === 'FIXED_INCOME' ||
+          account.type?.toUpperCase() === 'MUTUAL_FUND' ||
+          account.type?.toUpperCase() === 'INVESTMENT' ||
+          account.subtype?.toUpperCase() === 'CDB' ||
+          account.subtype?.toUpperCase() === 'INVESTMENT_FUND';
+        
+        if (isInvestment) {
+          console.log(`[SERVER] ⏭️  Pulando investimento (não sincroniza transações): ${account.name || account.type}`);
+          continue;
+        }
         
         // Buscar TODAS as transações do Pluggy (sem filtro de data)
         // Isso garante que transações novas sejam encontradas
@@ -4486,6 +4537,7 @@ app.get('/api/financial-goals', async (req, res) => {
         current_amount,
         description,
         target_date,
+        tag,
         is_completed,
         created_at,
         updated_at
@@ -4495,10 +4547,50 @@ app.get('/api/financial-goals', async (req, res) => {
         created_at DESC
     `).all();
 
+    // Para cada meta, calcular o valor atual baseado na tag (se houver)
     // Para metas do tipo "emergency_fund" (reserva de emergência), calcular o valor atual
     // baseado no saldo atual das contas e calcular meta baseada em 6 meses de gastos
     const goalsWithProgress = await Promise.all(goals.map(async (goal) => {
-      if (goal.type === 'emergency_fund') {
+      // Se a meta tem uma tag definida, buscar transações com essa tag e somar
+      if (goal.tag && goal.tag.trim() !== '') {
+        // Buscar transações com a tag específica
+        // Somar valores positivos (entradas) - valores guardados para a meta
+        const tagTransactions = database.prepare(`
+          SELECT 
+            SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_positive,
+            SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_negative,
+            COUNT(*) as count,
+            COUNT(CASE WHEN amount > 0 THEN 1 END) as count_positive,
+            COUNT(CASE WHEN amount < 0 THEN 1 END) as count_negative
+          FROM transactions
+          WHERE category = ?
+        `).get(goal.tag);
+        
+        const totalPositive = tagTransactions?.total_positive || 0;
+        const totalNegative = tagTransactions?.total_negative || 0;
+        const transactionCount = tagTransactions?.count || 0;
+        const countPositive = tagTransactions?.count_positive || 0;
+        const countNegative = tagTransactions?.count_negative || 0;
+        
+        // Para metas, geralmente queremos somar valores positivos (dinheiro guardado)
+        // Mas também podemos considerar valores negativos se o usuário quiser marcar gastos como parte da meta
+        // Por enquanto, vamos somar apenas valores positivos
+        goal.current_amount = Math.max(0, totalPositive);
+        
+        console.log(`[FINANCIAL_GOALS] Meta "${goal.name}" (tag: ${goal.tag}):`);
+        console.log(`[FINANCIAL_GOALS]   - Total de transações: ${transactionCount} (${countPositive} positivas, ${countNegative} negativas)`);
+        console.log(`[FINANCIAL_GOALS]   - Total positivo: R$ ${totalPositive}`);
+        console.log(`[FINANCIAL_GOALS]   - Total negativo: R$ ${totalNegative}`);
+        console.log(`[FINANCIAL_GOALS]   - Valor atual calculado: R$ ${goal.current_amount}`);
+        
+        // Se não encontrou transações, mostrar aviso
+        if (transactionCount === 0) {
+          console.log(`[FINANCIAL_GOALS]   ⚠️ Nenhuma transação encontrada com tag "${goal.tag}"`);
+        } else if (countPositive === 0) {
+          console.log(`[FINANCIAL_GOALS]   ⚠️ Nenhuma transação POSITIVA encontrada com tag "${goal.tag}"`);
+          console.log(`[FINANCIAL_GOALS]   💡 Dica: Para atualizar a meta, categorize transações de ENTRADA (valores positivos) com a tag "${goal.tag}"`);
+        }
+      } else if (goal.type === 'emergency_fund') {
         // Buscar saldo atual de todas as contas correntes
         const bankBalanceResult = database.prepare(`
           SELECT SUM(amount) as total
@@ -4542,16 +4634,52 @@ app.get('/api/financial-goals', async (req, res) => {
         goal.suggested_monthly_amount = remaining > 0 ? remaining / monthsToTarget : 0;
       }
       
+      // Calcular valor mensal necessário para todas as metas com data definida
+      if (goal.target_date && !goal.is_completed) {
+        const remaining = goal.target_amount - goal.current_amount;
+        const targetDate = new Date(goal.target_date);
+        const now = new Date();
+        
+        // Calcular meses restantes de forma mais precisa
+        const daysRemaining = Math.max(1, Math.ceil((targetDate - now) / (1000 * 60 * 60 * 24)));
+        const monthsRemaining = Math.max(1, daysRemaining / 30); // Usar dias/30 para ser mais preciso
+        
+        goal.required_monthly_amount = remaining > 0 ? remaining / monthsRemaining : 0;
+        
+        console.log(`[FINANCIAL_GOALS] Meta "${goal.name}":`);
+        console.log(`[FINANCIAL_GOALS]   - Valor alvo: R$ ${goal.target_amount}`);
+        console.log(`[FINANCIAL_GOALS]   - Valor atual: R$ ${goal.current_amount}`);
+        console.log(`[FINANCIAL_GOALS]   - Faltam: R$ ${remaining}`);
+        console.log(`[FINANCIAL_GOALS]   - Dias restantes: ${daysRemaining}`);
+        console.log(`[FINANCIAL_GOALS]   - Meses restantes: ${monthsRemaining.toFixed(2)}`);
+        console.log(`[FINANCIAL_GOALS]   - Valor mensal necessário: R$ ${goal.required_monthly_amount.toFixed(2)}`);
+      } else {
+        goal.required_monthly_amount = null;
+      }
+      
       const progress = goal.target_amount > 0 
         ? (goal.current_amount / goal.target_amount) * 100 
         : 0;
       
-      return {
+      const result = {
         ...goal,
         progress: Math.min(100, Math.max(0, progress)),
         remaining: Math.max(0, goal.target_amount - goal.current_amount),
-        isCompleted: goal.is_completed === 1 || progress >= 100
+        isCompleted: goal.is_completed === 1 || progress >= 100,
+        tag: goal.tag || null,
+        required_monthly_amount: goal.required_monthly_amount || null,
       };
+      
+      console.log(`[FINANCIAL_GOALS] Meta final "${goal.name}":`, {
+        tag: result.tag,
+        current_amount: result.current_amount,
+        target_amount: result.target_amount,
+        target_date: result.target_date,
+        required_monthly_amount: result.required_monthly_amount,
+        progress: result.progress,
+      });
+      
+      return result;
     }));
 
     res.json({ goals: goalsWithProgress });
@@ -4564,22 +4692,33 @@ app.get('/api/financial-goals', async (req, res) => {
 app.post('/api/financial-goals', (req, res) => {
   try {
     const database = getDB();
-    const { name, type, targetAmount, description, targetDate, currentAmount } = req.body;
+    const { name, type, targetAmount, description, targetDate, currentAmount, tag } = req.body;
+
+    console.log('[FINANCIAL_GOALS] Criando meta:', {
+      name,
+      tag: tag || '(vazio)',
+      tagType: typeof tag,
+      tagValue: tag,
+    });
 
     if (!name || !targetAmount) {
       return res.status(400).json({ error: 'Nome e valor alvo são obrigatórios' });
     }
 
+    // Normalizar tag: se for string vazia, converter para null
+    const normalizedTag = (tag && typeof tag === 'string' && tag.trim() !== '') ? tag.trim() : null;
+
     const result = database.prepare(`
-      INSERT INTO financial_goals (name, type, target_amount, current_amount, description, target_date, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO financial_goals (name, type, target_amount, current_amount, description, target_date, tag, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(
       name,
       type || 'custom',
       targetAmount,
       currentAmount || 0,
       description || null,
-      targetDate || null
+      targetDate || null,
+      normalizedTag
     );
 
     res.json({ 
@@ -4597,11 +4736,22 @@ app.put('/api/financial-goals/:id', (req, res) => {
   try {
     const database = getDB();
     const { id } = req.params;
-    const { name, type, targetAmount, description, targetDate, currentAmount, isCompleted } = req.body;
+    const { name, type, targetAmount, description, targetDate, currentAmount, isCompleted, tag } = req.body;
+
+    console.log('[FINANCIAL_GOALS] Atualizando meta:', {
+      id,
+      name,
+      tag: tag || '(vazio)',
+      tagType: typeof tag,
+      tagValue: tag,
+    });
 
     if (!name || !targetAmount) {
       return res.status(400).json({ error: 'Nome e valor alvo são obrigatórios' });
     }
+
+    // Normalizar tag: se for string vazia, converter para null
+    const normalizedTag = (tag && typeof tag === 'string' && tag.trim() !== '') ? tag.trim() : null;
 
     const result = database.prepare(`
       UPDATE financial_goals 
@@ -4611,6 +4761,7 @@ app.put('/api/financial-goals/:id', (req, res) => {
           current_amount = ?,
           description = ?,
           target_date = ?,
+          tag = ?,
           is_completed = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -4621,6 +4772,7 @@ app.put('/api/financial-goals/:id', (req, res) => {
       currentAmount || 0,
       description || null,
       targetDate || null,
+      normalizedTag,
       isCompleted ? 1 : 0,
       id
     );

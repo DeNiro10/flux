@@ -40,8 +40,8 @@ function App() {
     try {
       const savedTab = sessionStorage.getItem('activeTab');
       const savedFilters = sessionStorage.getItem('filters');
-      // Migrar 'goals' antigo para 'limits'
-      const tab = savedTab === 'goals' ? 'limits' : (savedTab || 'overview');
+      // Manter a aba salva (sem migração automática)
+      const tab = savedTab || 'overview';
       return {
         tab: tab,
         filters: savedFilters ? JSON.parse(savedFilters) : null
@@ -213,6 +213,7 @@ function App() {
     currentAmount: '',
     description: '',
     targetDate: '',
+    tag: '',
   });
 
   // Due Dates (Calendário)
@@ -230,6 +231,7 @@ function App() {
     amount: '',
     due_day: '',
   });
+
 
   const [expandedBalance, setExpandedBalance] = useState(false);
   const [loanForm, setLoanForm] = useState({
@@ -662,6 +664,12 @@ function App() {
 
   const handleOpenFinancialGoalModal = (goal = null) => {
     if (goal) {
+      console.log('[FRONTEND] Abrindo modal para editar meta:', {
+        id: goal.id,
+        name: goal.name,
+        tag: goal.tag || '(vazio)',
+        tagType: typeof goal.tag,
+      });
       setEditingFinancialGoal(goal);
       setFinancialGoalForm({
         name: goal.name || '',
@@ -670,6 +678,7 @@ function App() {
         currentAmount: goal.current_amount?.toString() || '',
         description: goal.description || '',
         targetDate: goal.target_date || '',
+        tag: goal.tag || '',
       });
     } else {
       setEditingFinancialGoal(null);
@@ -680,6 +689,7 @@ function App() {
         currentAmount: '',
         description: '',
         targetDate: '',
+        tag: '',
       });
     }
     setShowFinancialGoalModal(true);
@@ -695,6 +705,7 @@ function App() {
       currentAmount: '',
       description: '',
       targetDate: '',
+      tag: '',
     });
   };
 
@@ -707,7 +718,13 @@ function App() {
         currentAmount: parseFloat(financialGoalForm.currentAmount) || 0,
         description: financialGoalForm.description,
         targetDate: financialGoalForm.targetDate || null,
+        tag: financialGoalForm.tag && financialGoalForm.tag.trim() !== '' ? financialGoalForm.tag.trim() : null,
       };
+
+      console.log('[FRONTEND] Salvando meta financeira:', {
+        ...goalData,
+        tag: goalData.tag || '(vazio)',
+      });
 
       if (editingFinancialGoal) {
         await api.updateFinancialGoal(editingFinancialGoal.id, goalData);
@@ -884,6 +901,7 @@ function App() {
       setDueDatesData(prev => ({ ...prev, loading: false, error: err.message }));
     }
   };
+
 
   const handleOpenDueDateModal = (dueDate = null) => {
     if (dueDate) {
@@ -2703,17 +2721,55 @@ function App() {
                             )}
                           </div>
 
+                          {/* Valor mensal necessário (para todas as metas com data) */}
+                          {goal.target_date && !goal.isCompleted && (() => {
+                            const remaining = goal.target_amount - goal.current_amount;
+                            const targetDate = new Date(goal.target_date);
+                            const now = new Date();
+                            const daysRemaining = Math.max(1, Math.ceil((targetDate - now) / (1000 * 60 * 60 * 24)));
+                            const monthsRemaining = Math.max(1, daysRemaining / 30);
+                            const monthlyAmount = remaining > 0 ? remaining / monthsRemaining : 0;
+                            
+                            return (
+                              <div className={clsx("mt-4 p-3 rounded-lg border", "bg-[#00D4FF]/10 border-[#00D4FF]/30")}>
+                                <p className={clsx("text-xs font-medium mb-1 text-[#00D4FF]")}>💰 Valor Mensal Necessário</p>
+                                <p className={clsx("text-sm font-semibold text-[#00D4FF]")}>
+                                  {formatCurrency(monthlyAmount)}/mês
+                                </p>
+                                <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                                  Para atingir a meta até {DateTime.fromISO(goal.target_date).toLocaleString(DateTime.DATE_MED)}
+                                </p>
+                                {goal.tag && (
+                                  <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                                    💡 Categorize transações de ENTRADA (valores positivos) com a tag "{goal.tag}" para atualizar automaticamente
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()}
+
                           {/* Sugestão de valor mensal para Reserva de Emergência */}
-                          {goal.type === 'emergency_fund' && goal.suggested_monthly_amount && !goal.isCompleted && (
+                          {goal.type === 'emergency_fund' && goal.suggested_monthly_amount && !goal.isCompleted && !goal.target_date && (
                             <div className={clsx("mt-4 p-3 rounded-lg border", "bg-[#00D4FF]/10 border-[#00D4FF]/30")}>
                               <p className={clsx("text-xs font-medium mb-1 text-[#00D4FF]")}>💡 Sugestão Mensal</p>
                               <p className={clsx("text-sm font-semibold text-[#00D4FF]")}>
                                 {formatCurrency(goal.suggested_monthly_amount)}/mês
                               </p>
                               <p className={clsx("text-xs mt-1", theme.textMuted)}>
-                                Para atingir a meta em {goal.target_date ? 
-                                  Math.ceil((new Date(goal.target_date) - new Date()) / (1000 * 60 * 60 * 24 * 30)) : 
-                                  12} meses
+                                Para atingir a meta em 12 meses
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Mostrar tag se houver */}
+                          {goal.tag && (
+                            <div className={clsx("mt-3 pt-3 border-t", "border-white/5")}>
+                              <p className={clsx("text-xs font-medium mb-1", theme.textMuted)}>Tag/Categoria</p>
+                              <span className={clsx("inline-block px-2 py-1 rounded text-xs font-medium", darkMode ? "bg-[#7B61FF]/20 text-[#7B61FF]" : "bg-[#7B61FF]/10 text-[#7B61FF]")}>
+                                {goal.tag}
+                              </span>
+                              <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                                Valor atual calculado automaticamente das transações com esta tag
                               </p>
                             </div>
                           )}
@@ -3828,7 +3884,7 @@ function App() {
                   )}
                 </div>
 
-                {financialGoalForm.type !== 'emergency_fund' && (
+                {financialGoalForm.type !== 'emergency_fund' && !financialGoalForm.tag && (
                   <div>
                     <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Valor Atual</label>
                     <input
@@ -3840,7 +3896,15 @@ function App() {
                       placeholder="0.00"
                     />
                     <p className={clsx("text-xs mt-1", theme.textMuted)}>
-                      Quanto você já tem guardado para esta meta
+                      Quanto você já tem guardado para esta meta. Se você definir uma tag abaixo, este valor será calculado automaticamente.
+                    </p>
+                  </div>
+                )}
+                {financialGoalForm.tag && (
+                  <div className={clsx("p-3 rounded-lg border", "bg-[#00D4FF]/10 border-[#00D4FF]/30")}>
+                    <p className={clsx("text-xs font-medium mb-1 text-[#00D4FF]")}>ℹ️ Valor Atual Automático</p>
+                    <p className={clsx("text-xs", theme.textMuted)}>
+                      O valor atual será calculado automaticamente somando todas as transações com a tag "{financialGoalForm.tag}"
                     </p>
                   </div>
                 )}
@@ -3857,6 +3921,23 @@ function App() {
                 </div>
 
                 <div>
+                  <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Tag/Categoria (Opcional)</label>
+                  <select
+                    value={financialGoalForm.tag}
+                    onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, tag: e.target.value })}
+                    className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
+                  >
+                    <option value="">Selecione uma tag...</option>
+                    {categories.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                  <p className={clsx("text-xs mt-1", theme.textMuted)}>
+                    Selecione a tag/categoria das transações que serão somadas automaticamente para esta meta
+                  </p>
+                </div>
+
+                <div>
                   <label className={clsx("block text-sm font-medium mb-2", theme.text)}>Data Alvo (Opcional)</label>
                   <input
                     type="date"
@@ -3865,7 +3946,7 @@ function App() {
                     className={clsx("w-full px-4 py-2 rounded-lg border", theme.cardBorder, "bg-transparent", theme.text)}
                   />
                   <p className={clsx("text-xs mt-1", theme.textMuted)}>
-                    Quando você pretende alcançar esta meta
+                    Quando você pretende alcançar esta meta. Se definida, será calculado o valor mensal necessário.
                   </p>
                 </div>
 
