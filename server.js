@@ -6327,7 +6327,8 @@ app.post('/api/validation-rules/seed-defaults', (req, res) => {
       { expenseName: 'AirPods', recipientNames: 'Karina Mildenberg' },
       { expenseName: 'Consultoria', recipientNames: 'Murillo Eduardo' },
       { expenseName: 'Inglês', recipientNames: 'Moises, Izabella Mazzo' },
-      { expenseName: 'Ingles', recipientNames: 'Moises, Izabella Mazzo' }
+      { expenseName: 'Ingles', recipientNames: 'Moises, Izabella Mazzo' },
+      { expenseName: 'Internet', recipientNames: 'k2 network, K2 Network, K2 NETWORK' }
     ];
 
     let inserted = 0;

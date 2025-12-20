@@ -301,6 +301,8 @@ export class PluggyClient {
     const pageSize = options.pageSize || 500; // Tamanho máximo de página da API Pluggy
     
     console.log(`[PluggyClient] Iniciando busca de transações para accountId: ${accountId}`);
+    console.log(`[PluggyClient] Tamanho da página: ${pageSize}`);
+    console.log(`[PluggyClient] Buscando TODAS as transações (sem filtro de data)`);
     
     while (hasMore) {
       const params = new URLSearchParams({
@@ -309,7 +311,7 @@ export class PluggyClient {
         pageSize: String(pageSize),
         ...Object.fromEntries(
           Object.entries(options)
-            .filter(([key]) => key !== 'pageSize') // Remover pageSize das opções para não duplicar
+            .filter(([key]) => key !== 'pageSize' && key !== 'fromDate') // Remover pageSize e fromDate das opções
             .map(([key, value]) => [key, String(value)])
         ),
       });
@@ -321,6 +323,7 @@ export class PluggyClient {
       let transactions = [];
       let currentPage = page;
       let totalPages = 1;
+      let total = 0;
       
       if (Array.isArray(response)) {
         // Se for array direto (raro, mas possível)
@@ -331,11 +334,26 @@ export class PluggyClient {
         transactions = response.results || response.data || [];
         currentPage = response.page || page;
         totalPages = response.totalPages || 1;
+        total = response.total || 0;
+        
+        console.log(`[PluggyClient] Página ${currentPage}/${totalPages} (total: ${total}): ${transactions.length} transações`);
         
         // Verificar se há mais páginas
-        hasMore = currentPage < totalPages && transactions.length > 0;
+        // IMPORTANTE: Verificar tanto pelo número de páginas quanto pelo total de resultados
+        if (totalPages > 1) {
+          hasMore = currentPage < totalPages;
+        } else if (total > 0) {
+          // Se temos o total, verificar se já buscamos todas
+          hasMore = allTransactions.length < total;
+        } else {
+          // Se não temos informações de paginação, continuar enquanto houver transações
+          hasMore = transactions.length === pageSize;
+        }
         
-        console.log(`[PluggyClient] Página ${currentPage}/${totalPages}: ${transactions.length} transações`);
+        // Se temos o total e já buscamos todas, parar
+        if (total > 0 && allTransactions.length + transactions.length >= total) {
+          console.log(`[PluggyClient] Todas as transações serão buscadas nesta página (${allTransactions.length + transactions.length}/${total})`);
+        }
       } else {
         hasMore = false;
       }
@@ -343,6 +361,14 @@ export class PluggyClient {
       if (transactions.length > 0) {
         allTransactions = allTransactions.concat(transactions);
         console.log(`[PluggyClient] Total acumulado: ${allTransactions.length} transações`);
+        
+        // Log da primeira e última transação para debug
+        if (page === 1 && transactions.length > 0) {
+          const first = transactions[0];
+          const last = transactions[transactions.length - 1];
+          console.log(`[PluggyClient] Primeira transação: ${first.date} - ${first.description} - ${first.amount}`);
+          console.log(`[PluggyClient] Última transação da página: ${last.date} - ${last.description} - ${last.amount}`);
+        }
       }
       
       page++;
@@ -360,6 +386,14 @@ export class PluggyClient {
     }
     
     console.log(`[PluggyClient] ✅ Total de transações buscadas: ${allTransactions.length} (${page - 1} páginas)`);
+    
+    // Ordenar por data DESC (mais recentes primeiro) para garantir ordem correta
+    allTransactions.sort((a, b) => {
+      const dateA = new Date(a.date || 0);
+      const dateB = new Date(b.date || 0);
+      return dateB - dateA; // DESC
+    });
+    
     return allTransactions;
   }
 
